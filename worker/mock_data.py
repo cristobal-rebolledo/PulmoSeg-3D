@@ -52,7 +52,7 @@ def get_mock_artifacts(job_id: str) -> dict:
     output_base = Path("local_storage") / "outputs" / job_id
 
     return {
-        "segmentation_mask_nifti_url": str(output_base / "mask.nii.gz"),
+        "segmentation_mask_nifti_url": str(output_base / "mask_predicted.nii.gz"),
         "uncertainty_map_url": str(output_base / "uncertainty.nii.gz"),
     }
 

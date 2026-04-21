@@ -1,22 +1,28 @@
 """
 pipeline_monai.py — Pipeline de preprocesamiento e inferencia MONAI para PulmoSeg 3D.
 
-Regla 2 aplicada: Placeholder de Preprocesamiento Médico.
-  - Define transforms reales de MONAI para CT pulmonar.
-  - Configura SlidingWindowInferer con patch [64,64,64] en CPU.
-  - En Fase 1 NO ejecuta inferencia real: retorna resultados mock.
-  - Cada punto de extensión está marcado con "TODO: Fase 2".
+Flujo completo del pipeline:
+  1. Conversión DICOM → NIfTI (SimpleITK).
+  2. Preprocesamiento MONAI (Orientación, Spacing, Ventana HU).
+  3. Inferencia real con SlidingWindowInferer sobre el modelo cargado.
+  4. Post-procesamiento: softmax → argmax → máscara binaria.
+  5. Guardado de la máscara como mask_predicted.nii.gz.
+  6. Cálculo de métricas clínicas con clinical_metrics.py.
 
-Regla 3 aplicada: Ingesta DICOM Simplificada.
-  - Conversión DICOM→NIfTI usando SimpleITK.
-  - Asume Toy Dataset limpio y ordenado.
+Diseño modular:
+  Todos los parámetros del modelo (arquitectura, preprocesamiento, inferer)
+  se leen desde worker.model_config.ModelConfig.  Para cambiar de modelo
+  solo hay que editar model_config.py → get_active_config().
 
-Hardware: Fuerza device='cpu' para evitar OOM en hardware local (4GB VRAM máx).
+Fallback graceful:
+  Si el modelo .pt no existe o la inferencia falla, el pipeline cae al modo
+  mock con un warning en el log.  El sistema nunca se rompe por falta del
+  modelo.
 """
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 
@@ -29,10 +35,15 @@ try:
     import SimpleITK as sitk
     import torch
     from monai.inferers import SlidingWindowInferer
+    from monai.networks.nets import UNet
     from monai.transforms import (
+        Activations,
+        AsDiscrete,
         Compose,
         EnsureChannelFirstd,
+        EnsureTyped,
         LoadImaged,
+        Orientationd,
         ScaleIntensityRanged,
         Spacingd,
     )
@@ -41,32 +52,18 @@ try:
 except ImportError:
     MONAI_AVAILABLE = False
 
+from worker.clinical_metrics import compute_clinical_metrics
 from worker.mock_data import get_mock_artifacts, get_mock_clinical_results
+from worker.model_config import ModelConfig, get_active_config
 
 logger = logging.getLogger("pulmoseg.pipeline")
-
-# ---------------------------------------------------------------------------
-# Constantes del pipeline
-# ---------------------------------------------------------------------------
-# Ventana Hounsfield para tejido pulmonar
-# -1000 HU = aire, +400 HU = incluye tejido blando y calcificaciones
-HU_WINDOW_MIN = -1000
-HU_WINDOW_MAX = 400
-
-# Resolución isotrópica objetivo (mm)
-TARGET_SPACING = (1.5, 1.5, 1.5)
-
-# Tamaño de parche para SlidingWindowInferer (Regla 2)
-# [64, 64, 64] es deliberadamente pequeño para evitar OOM en CPU/GPU local
-PATCH_SIZE = (64, 64, 64)
-SLIDING_WINDOW_OVERLAP = 0.25
 
 # Ruta base de almacenamiento local
 LOCAL_STORAGE_BASE = Path("local_storage")
 
 
 # ===========================================================================
-# Conversión DICOM → NIfTI (Regla 3: Simplificada)
+# Conversión DICOM → NIfTI
 # ===========================================================================
 def convert_dicom_to_nifti(
     dicom_dir: str | Path,
@@ -75,9 +72,8 @@ def convert_dicom_to_nifti(
     """
     Convierte una serie DICOM a un volumen NIfTI usando SimpleITK.
 
-    Regla 3: Asume que el Toy Dataset viene limpio, ordenado y sin
-    inconsistencias de metadatos severas. No implementa validación
-    exhaustiva de metadatos DICOM en esta fase.
+    Asume que el Toy Dataset viene limpio, ordenado y sin
+    inconsistencias de metadatos severas.
 
     Args:
         dicom_dir: Directorio que contiene los archivos DICOM de una serie.
@@ -136,19 +132,22 @@ def convert_dicom_to_nifti(
 
 
 # ===========================================================================
-# Transforms de Preprocesamiento MONAI (Regla 2)
+# Transforms de Preprocesamiento MONAI (configurables por modelo)
 # ===========================================================================
-def get_preprocessing_transforms() -> Optional["Compose"]:
+def get_preprocessing_transforms(config: ModelConfig) -> Optional["Compose"]:
     """
-    Define el pipeline de preprocesamiento estándar para CT de pulmón
-    usando monai.transforms.
+    Define el pipeline de preprocesamiento según la configuración del modelo.
 
     Transforms aplicadas (en orden):
       1. LoadImaged       — Carga el volumen NIfTI desde disco.
-      2. EnsureChannelFirstd — Garantiza formato (C, H, W, D).
-      3. Spacingd          — Remuestreo isotrópico a 1.5mm en cada eje.
-      4. ScaleIntensityRanged — Normalización de ventana Hounsfield
-                                [-1000, +400] HU → [0.0, 1.0].
+      2. EnsureChannelFirstd — Garantiza formato (C, D, H, W).
+      3. Orientationd     — Reorienta al sistema de coordenadas del modelo.
+      4. Spacingd         — Remuestreo al spacing objetivo del modelo.
+      5. ScaleIntensityRanged — Ventana Hounsfield específica del modelo.
+      6. EnsureTyped      — Garantiza tipo tensor PyTorch.
+
+    Args:
+        config: ModelConfig con los parámetros de preprocesamiento.
 
     Returns:
         Compose de MONAI con las transforms, o None si MONAI no está disponible.
@@ -161,49 +160,171 @@ def get_preprocessing_transforms() -> Optional["Compose"]:
         # 1. Carga el NIfTI y retorna un dict con key "image"
         LoadImaged(keys=["image"]),
 
-        # 2. Asegura que el tensor tenga dimensión de canal al inicio: (C, H, W, D)
+        # 2. Asegura que el tensor tenga dimensión de canal al inicio
         EnsureChannelFirstd(keys=["image"]),
 
-        # 3. Remuestreo isotrópico: normaliza la resolución espacial
-        #    a 1.5mm en cada eje para que el modelo reciba inputs consistentes
+        # 3. Reorienta al sistema de coordenadas que espera el modelo
+        Orientationd(keys=["image"], axcodes=config.orientation),
+
+        # 4. Remuestreo al spacing objetivo del modelo
         Spacingd(
             keys=["image"],
-            pixdim=TARGET_SPACING,
+            pixdim=config.target_spacing,
             mode="bilinear",
         ),
 
-        # 4. Normalización de intensidad: ventana pulmonar Hounsfield
-        #    Aire = -1000 HU, Tejido blando/calcificación = +400 HU
-        #    Se mapea linealmente a [0.0, 1.0] con clipping
+        # 5. Normalización de intensidad: ventana HU específica del modelo
         ScaleIntensityRanged(
             keys=["image"],
-            a_min=HU_WINDOW_MIN,
-            a_max=HU_WINDOW_MAX,
+            a_min=config.hu_window_min,
+            a_max=config.hu_window_max,
             b_min=0.0,
             b_max=1.0,
             clip=True,
         ),
+
+        # 6. Garantiza tipo tensor PyTorch
+        EnsureTyped(keys=["image"]),
     ])
 
     logger.info(
         f"Pipeline de preprocesamiento configurado: "
-        f"Spacing={TARGET_SPACING}, HU=[{HU_WINDOW_MIN}, {HU_WINDOW_MAX}]"
+        f"Spacing={config.target_spacing}, "
+        f"HU=[{config.hu_window_min}, {config.hu_window_max}], "
+        f"Orientación={config.orientation}"
     )
 
     return transforms
 
 
 # ===========================================================================
-# Configuración del Inferer (Regla 2: CPU + Sliding Window)
+# Carga del Modelo (modular por configuración)
 # ===========================================================================
-def get_inferer() -> Optional["SlidingWindowInferer"]:
+def load_model(
+    config: ModelConfig,
+    device: "torch.device",
+) -> Optional["torch.nn.Module"]:
     """
-    Configura el SlidingWindowInferer de MONAI para inferencia en parches.
+    Instancia la red neuronal y carga los pesos desde el checkpoint.
 
-    Regla 2: Usa un tamaño de parche [64, 64, 64] deliberadamente pequeño
-    para garantizar que el proceso no cause errores OOM en hardware local
-    con ≤4GB de VRAM. El overlap de 0.25 (25%) proporciona continuidad
-    entre parches adyacentes.
+    Soporta dos formatos de checkpoint:
+      1. Dict con clave (e.g. {"model": state_dict}) — checkpoint_key != None.
+      2. State_dict directo — checkpoint_key == None.
+
+    La arquitectura se instancia según config.network_type:
+      - "UNet": monai.networks.nets.UNet
+
+    Args:
+        config: ModelConfig con la arquitectura y ruta al checkpoint.
+        device: Dispositivo PyTorch donde cargar el modelo.
+
+    Returns:
+        Modelo listo para inferencia (.eval()), o None si falla.
+    """
+    if not MONAI_AVAILABLE:
+        logger.warning("MONAI no disponible — modelo no cargado")
+        return None
+
+    weights_path = config.weights_path
+    if not weights_path.exists():
+        logger.error(
+            f"Archivo de pesos no encontrado: {weights_path}\n"
+            f"Descarga el bundle y coloca model.pt en esta ruta."
+        )
+        return None
+
+    try:
+        # --- 1. Instanciar la red según la arquitectura ---
+        if config.network_type == "UNet":
+            model = UNet(
+                spatial_dims=config.spatial_dims,
+                in_channels=config.in_channels,
+                out_channels=config.out_channels,
+                channels=list(config.channels),
+                strides=list(config.strides),
+                num_res_units=config.num_res_units,
+                norm=config.norm,
+            )
+        else:
+            # Punto de extensión para SegResNet u otras arquitecturas
+            raise ValueError(
+                f"Arquitectura no soportada: {config.network_type}. "
+                f"Agrega soporte en load_model()."
+            )
+
+        logger.info(
+            f"Red instanciada: {config.network_type} | "
+            f"in={config.in_channels}, out={config.out_channels}, "
+            f"channels={config.channels}"
+        )
+
+        # --- 2. Cargar pesos del checkpoint ---
+        # Formatos de checkpoint soportados:
+        #   a) Dict anidado:  {"model": state_dict, ...}
+        #   b) Dict con key:  {"state_dict": state_dict, ...}
+        #   c) state_dict directo: OrderedDict de pesos de capas
+        checkpoint = torch.load(
+            str(weights_path),
+            map_location=device,
+            weights_only=False,
+        )
+
+        if isinstance(checkpoint, dict) and config.checkpoint_key and config.checkpoint_key in checkpoint:
+            # Formato (a): dict anidado con la clave configurada
+            state_dict = checkpoint[config.checkpoint_key]
+            logger.info(f"state_dict extraído con clave '{config.checkpoint_key}'")
+        elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+            # Formato (b): convención alternativa común en PyTorch Lightning
+            state_dict = checkpoint["state_dict"]
+            logger.info("state_dict extraído con clave 'state_dict'")
+        else:
+            # Formato (c): el checkpoint cargado ES directamente el state_dict
+            state_dict = checkpoint
+            logger.info(
+                "Checkpoint interpretado como state_dict directo "
+                f"({len(state_dict)} parámetros)"
+            )
+
+        model.load_state_dict(state_dict)
+        logger.info(f"Pesos cargados desde: {weights_path}")
+
+        # --- 3. Preparar para inferencia ---
+        model = model.to(device)
+        model.eval()
+
+        param_count = sum(p.numel() for p in model.parameters())
+        logger.info(
+            f"Modelo listo: {param_count:,} parámetros | "
+            f"Device: {device} | Mode: eval"
+        )
+
+        return model
+
+    except Exception as e:
+        logger.error(
+            f"Error cargando modelo desde {weights_path}: {e}",
+            exc_info=True,
+        )
+        return None
+
+
+# ===========================================================================
+# Configuración del Inferer (configurable por modelo)
+# ===========================================================================
+def get_inferer(
+    config: ModelConfig,
+    device: "torch.device",
+) -> Optional["SlidingWindowInferer"]:
+    """
+    Configura el SlidingWindowInferer según los parámetros del modelo.
+
+    Selecciona sw_batch_size según el dispositivo:
+      - GPU: usa config.sw_batch_size_gpu (mayor throughput).
+      - CPU: usa config.sw_batch_size_cpu (conservador para evitar OOM).
+
+    Args:
+        config: ModelConfig con roi_size, overlap y batch sizes.
+        device: Dispositivo para determinar el batch size.
 
     Returns:
         SlidingWindowInferer configurado, o None si MONAI no está disponible.
@@ -212,19 +333,130 @@ def get_inferer() -> Optional["SlidingWindowInferer"]:
         logger.warning("MONAI no disponible — inferer no configurado")
         return None
 
+    is_gpu = device.type == "cuda"
+    sw_batch_size = config.sw_batch_size_gpu if is_gpu else config.sw_batch_size_cpu
+
     inferer = SlidingWindowInferer(
-        roi_size=PATCH_SIZE,
-        sw_batch_size=1,  # Un parche a la vez para minimizar uso de memoria
-        overlap=SLIDING_WINDOW_OVERLAP,
-        mode="gaussian",  # Ponderación gaussiana para suavizar bordes de parche
+        roi_size=config.roi_size,
+        sw_batch_size=sw_batch_size,
+        overlap=config.overlap,
+        mode="gaussian",  # Ponderación gaussiana para suavizar bordes
     )
 
     logger.info(
         f"SlidingWindowInferer configurado: "
-        f"patch_size={PATCH_SIZE}, overlap={SLIDING_WINDOW_OVERLAP}"
+        f"roi_size={config.roi_size}, overlap={config.overlap}, "
+        f"sw_batch_size={sw_batch_size} ({'GPU' if is_gpu else 'CPU'})"
     )
 
     return inferer
+
+
+# ===========================================================================
+# Post-procesamiento de la predicción
+# ===========================================================================
+def postprocess_prediction(
+    prediction: "torch.Tensor",
+    config: ModelConfig,
+) -> np.ndarray:
+    """
+    Convierte los logits/probabilidades de salida en una máscara binaria.
+
+    Pipeline de post-procesamiento:
+      1. Activación: softmax (multi-clase) o sigmoid (binario).
+      2. Discretización: argmax sobre canales.
+      3. Extracción: selecciona el canal foreground como máscara binaria.
+      4. Conversión a NumPy array uint8.
+
+    Args:
+        prediction: Tensor de salida del modelo, shape (B, C, D, H, W).
+        config: ModelConfig con parámetros de post-procesamiento.
+
+    Returns:
+        Array NumPy binario 3D (D, H, W), dtype uint8.
+    """
+    # Activación
+    if config.use_softmax:
+        activation = Activations(softmax=True)
+    else:
+        activation = Activations(sigmoid=True)
+
+    activated = activation(prediction)
+
+    # Discretización: argmax sobre la dimensión de canales
+    discretize = AsDiscrete(argmax=True)
+    discrete = discretize(activated)
+
+    # Squeeze batch dim y convertir a NumPy
+    # discrete shape: (B, 1, D, H, W) → (D, H, W)
+    mask_np = discrete.squeeze(0).squeeze(0).cpu().numpy().astype(np.uint8)
+
+    n_foreground = int(mask_np.sum())
+    total_voxels = int(np.prod(mask_np.shape))
+    pct = (n_foreground / total_voxels) * 100 if total_voxels > 0 else 0
+
+    logger.info(
+        f"Post-procesamiento completado: "
+        f"shape={mask_np.shape}, "
+        f"vóxeles foreground={n_foreground:,} ({pct:.2f}%)"
+    )
+
+    return mask_np
+
+
+# ===========================================================================
+# Guardado de la máscara predicha como NIfTI
+# ===========================================================================
+def save_predicted_mask(
+    mask_np: np.ndarray,
+    output_dir: Path,
+    spacing: tuple[float, float, float],
+    reference_nifti_path: Optional[Path] = None,
+) -> Path:
+    """
+    Guarda la máscara de segmentación predicha como archivo NIfTI.
+
+    Si hay un volumen NIfTI de referencia, copia su información espacial
+    (origin, direction) para mantener alineación geométrica.
+
+    Args:
+        mask_np: Array binario 3D (D, H, W), dtype uint8.
+        output_dir: Directorio de salida del Job.
+        spacing: Spacing en mm del volumen procesado.
+        reference_nifti_path: Path al volumen NIfTI original para copiar
+                              metadatos espaciales.
+
+    Returns:
+        Path al archivo mask_predicted.nii.gz generado.
+    """
+    if not MONAI_AVAILABLE:
+        placeholder = output_dir / "mask_predicted.nii.gz"
+        placeholder.touch(exist_ok=True)
+        return placeholder
+
+    mask_image = sitk.GetImageFromArray(mask_np.astype(np.uint8))
+    mask_image.SetSpacing(spacing)
+
+    # Copiar metadatos espaciales del volumen de referencia si existe
+    if reference_nifti_path and reference_nifti_path.exists():
+        try:
+            ref_image = sitk.ReadImage(str(reference_nifti_path))
+            mask_image.SetOrigin(ref_image.GetOrigin())
+            mask_image.SetDirection(ref_image.GetDirection())
+            logger.info("Metadatos espaciales copiados del volumen de referencia")
+        except Exception as e:
+            logger.warning(
+                f"No se pudieron copiar metadatos de referencia: {e}"
+            )
+
+    mask_path = output_dir / "mask_predicted.nii.gz"
+    sitk.WriteImage(mask_image, str(mask_path))
+    logger.info(
+        f"Máscara predicha guardada: {mask_path} | "
+        f"shape={mask_np.shape}, spacing={spacing}"
+    )
+
+    return mask_path
 
 
 # ===========================================================================
@@ -234,17 +466,21 @@ def run_inference_pipeline(
     job_id: str,
     request_data: dict,
     dicom_dir: Path | None = None,
-    progress_callback: callable = None,
+    progress_callback: Callable | None = None,
 ) -> dict:
     """
-    Ejecuta el pipeline completo de segmentación pulmonar.
+    Ejecuta el pipeline completo de segmentación.
 
-    Flujo actual:
-      1. Configura el dispositivo (CPU).
-      2. Convierte DICOM → NIfTI usando SimpleITK (archivos reales).
-      3. Aplica transforms de preprocesamiento MONAI (datos reales).
-      4. Inferencia: retorna resultados mock (modelo real en Fase 2).
-      5. Genera archivos de salida NIfTI (máscara mock basada en volumen real).
+    Flujo:
+      1. Configura dispositivo (CUDA si disponible, si no CPU).
+      2. Carga la configuración del modelo activo.
+      3. Convierte DICOM → NIfTI usando SimpleITK.
+      4. Aplica transforms de preprocesamiento según el modelo.
+      5. Carga el modelo y ejecuta inferencia con SlidingWindowInferer.
+      6. Post-procesa: softmax → argmax → máscara binaria.
+      7. Guarda máscara como mask_predicted.nii.gz.
+      8. Calcula métricas clínicas desde la máscara real.
+      9. Si cualquier paso falla, cae al modo mock.
 
     Args:
         job_id: Identificador único del Job.
@@ -266,44 +502,46 @@ def run_inference_pipeline(
         logger.info(f"[{job_id}] {msg}")
 
     # --- 1. Configurar dispositivo ---
-    # Regla 2: Forzar CPU para evitar OOM en hardware local
     if MONAI_AVAILABLE:
-        device = torch.device("cpu")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"[{job_id}] Dispositivo configurado: {device}")
     else:
+        device = None
         logger.info(f"[{job_id}] MONAI no disponible — modo mock completo")
 
-    # --- 2. Crear directorio de salida para este Job ---
+    # --- 2. Cargar configuración del modelo activo ---
+    config = get_active_config()
+    _report(5, f"Modelo configurado: {config.name}")
+
+    # --- 3. Crear directorio de salida para este Job ---
     output_dir = LOCAL_STORAGE_BASE / "outputs" / job_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- 3. Conversión DICOM → NIfTI (datos reales) ---
+    # --- 4. Conversión DICOM → NIfTI (datos reales) ---
     nifti_path = output_dir / "volume.nii.gz"
 
     if dicom_dir and MONAI_AVAILABLE:
-        _report(20, f"Convirtiendo DICOM a NIfTI desde: {dicom_dir}")
+        _report(15, f"Convirtiendo DICOM a NIfTI desde: {dicom_dir}")
         nifti_path = convert_dicom_to_nifti(dicom_dir, nifti_path)
-        _report(35, f"Volumen NIfTI generado: {nifti_path}")
+        _report(25, f"Volumen NIfTI generado: {nifti_path}")
     else:
-        _report(20, "Sin directorio DICOM o MONAI — omitiendo conversión")
+        _report(15, "Sin directorio DICOM o MONAI — omitiendo conversión")
 
-    # --- 4. Preprocesamiento MONAI (datos reales) ---
+    # --- 5. Preprocesamiento MONAI (datos reales) ---
     preprocessed_data = None
 
     if MONAI_AVAILABLE and nifti_path.exists() and nifti_path.stat().st_size > 0:
-        _report(40, "Aplicando preprocesamiento MONAI...")
+        _report(30, "Aplicando preprocesamiento MONAI...")
 
-        transforms = get_preprocessing_transforms()
+        transforms = get_preprocessing_transforms(config)
         if transforms:
             try:
-                # Ejecutar transforms sobre el volumen NIfTI real
                 data_dict = {"image": str(nifti_path)}
                 preprocessed_data = transforms(data_dict)
 
-                # Log de las dimensiones del tensor preprocesado
                 img_tensor = preprocessed_data["image"]
                 _report(
-                    55,
+                    40,
                     f"Preprocesamiento completado — "
                     f"Tensor shape: {list(img_tensor.shape)}, "
                     f"dtype: {img_tensor.dtype}, "
@@ -315,44 +553,129 @@ def run_inference_pipeline(
                     f"Continuando con resultados mock.",
                     exc_info=True,
                 )
-                _report(55, f"Preprocesamiento falló — continuando con mock")
+                _report(40, "Preprocesamiento falló — continuando con mock")
     else:
-        _report(55, "Volumen NIfTI no disponible — omitiendo preprocesamiento")
+        _report(40, "Volumen NIfTI no disponible — omitiendo preprocesamiento")
 
-    # --- 5. Inferencia (mock — modelo real en Fase 2) ---
-    _report(60, "Ejecutando inferencia SegResNet (mock en esta fase)...")
+    # --- 6. Inferencia real con SlidingWindowInferer ---
+    mask_np = None
 
-    # Configurar inferer (listo para Fase 2)
-    inferer = get_inferer()
-    if inferer:
-        logger.info(
-            f"[{job_id}] SlidingWindowInferer configurado "
-            f"(se activará con modelo real en Fase 2)"
+    if MONAI_AVAILABLE and preprocessed_data is not None:
+        _report(45, f"Cargando modelo: {config.name}...")
+
+        model = load_model(config, device)
+        inferer = get_inferer(config, device)
+
+        if model is not None and inferer is not None:
+            try:
+                _report(
+                    50,
+                    f"Ejecutando inferencia por parches "
+                    f"(roi_size={config.roi_size}, overlap={config.overlap})..."
+                )
+
+                # Preparar tensor de entrada: (C, D, H, W) → (B, C, D, H, W)
+                input_tensor = preprocessed_data["image"].unsqueeze(0).to(device)
+                logger.info(
+                    f"[{job_id}] Input tensor: shape={list(input_tensor.shape)}, "
+                    f"device={input_tensor.device}"
+                )
+
+                # Inferencia con SlidingWindowInferer
+                with torch.no_grad():
+                    prediction = inferer(input_tensor, model)
+
+                logger.info(
+                    f"[{job_id}] Predicción raw: shape={list(prediction.shape)}, "
+                    f"rango=[{prediction.min():.4f}, {prediction.max():.4f}]"
+                )
+
+                _report(70, "Inferencia completada — aplicando post-procesamiento...")
+
+                # Post-procesamiento: softmax → argmax → máscara binaria
+                mask_np = postprocess_prediction(prediction, config)
+
+                _report(
+                    75,
+                    f"Máscara generada: shape={mask_np.shape}, "
+                    f"vóxeles positivos={int(mask_np.sum()):,}"
+                )
+
+            except Exception as e:
+                logger.error(
+                    f"[{job_id}] Error durante inferencia: {e}",
+                    exc_info=True,
+                )
+                _report(70, f"Inferencia falló: {e} — usando mock")
+                mask_np = None
+        else:
+            _report(
+                70,
+                "Modelo o inferer no disponible — usando resultados mock"
+            )
+    else:
+        _report(70, "Sin datos preprocesados — usando resultados mock")
+
+    # --- 7. Guardar máscara y calcular métricas clínicas ---
+    clinical_results = None
+
+    if mask_np is not None and mask_np.sum() > 0:
+        _report(80, "Guardando máscara predicha como NIfTI...")
+
+        # El spacing para SimpleITK debe estar en orden (W, H, D)
+        # El config.target_spacing está en orden MONAI (D, H, W) si
+        # no se reorientó, pero con Orientationd(RAS) los ejes son (R, A, S).
+        # Usamos el spacing tal como lo define el config para consistencia.
+        spacing_sitk = tuple(reversed(config.target_spacing))
+
+        mask_path = save_predicted_mask(
+            mask_np=mask_np,
+            output_dir=output_dir,
+            spacing=spacing_sitk,
+            reference_nifti_path=nifti_path if nifti_path.exists() else None,
         )
 
-    # TODO: Fase 2 — Reemplazar este bloque con inferencia real:
-    #
-    # model_path = LOCAL_STORAGE_BASE / "models" / "SegResNet_Lung_v2.1.pth"
-    # model = load_segresnet_model(model_path, device)
-    # model.eval()
-    #
-    # with torch.no_grad():
-    #     input_tensor = preprocessed_data["image"].unsqueeze(0).to(device)
-    #     prediction = inferer(input_tensor, model)
-    #
-    # mask = (prediction > 0.5).squeeze().cpu().numpy()
+        _report(85, "Calculando métricas clínicas desde la máscara predicha...")
 
-    _report(75, "Inferencia completada — generando archivos de salida...")
+        try:
+            clinical_results = compute_clinical_metrics(
+                mask=mask_np,
+                voxel_spacing=config.target_spacing,
+                lesion_id="L1",
+            )
+            logger.info(
+                f"[{job_id}] Métricas clínicas calculadas desde predicción real"
+            )
+        except Exception as e:
+            logger.warning(
+                f"[{job_id}] Error calculando métricas: {e}. Usando mock.",
+                exc_info=True,
+            )
+    else:
+        if mask_np is not None and mask_np.sum() == 0:
+            _report(
+                85,
+                "Máscara vacía (0 vóxeles positivos) — usando resultados mock"
+            )
+        _report(85, "Generando resultados mock...")
 
-    # --- 6. Generar archivos de salida ---
-    _generate_output_files(output_dir, preprocessed_data)
+    # --- 8. Fallback a mock si no se calcularon métricas ---
+    if clinical_results is None:
+        clinical_results = get_mock_clinical_results()
+        logger.info(f"[{job_id}] Usando resultados clínicos mock")
 
-    _report(90, "Postprocesamiento y cálculo volumétrico (mock)...")
+    _report(90, "Construyendo resultado final...")
 
-    # --- 7. Construir resultados ---
+    # --- 9. Construir y retornar resultados ---
+    # Actualizar artifacts con la ruta real de la máscara predicha
+    artifacts = get_mock_artifacts(job_id)
+    predicted_mask_file = output_dir / "mask_predicted.nii.gz"
+    if predicted_mask_file.exists():
+        artifacts["segmentation_mask_nifti_url"] = str(predicted_mask_file)
+
     result = {
-        "clinical_results": get_mock_clinical_results(),
-        "artifacts": get_mock_artifacts(job_id),
+        "clinical_results": clinical_results,
+        "artifacts": artifacts,
     }
 
     logger.info(
@@ -362,84 +685,3 @@ def run_inference_pipeline(
     )
 
     return result
-
-
-# ===========================================================================
-# Generación de archivos de salida
-# ===========================================================================
-def _generate_output_files(
-    output_dir: Path,
-    preprocessed_data: dict | None = None,
-) -> None:
-    """
-    Genera los archivos NIfTI de salida (máscara y mapa de incertidumbre).
-
-    Si hay datos preprocesados disponibles, genera una máscara mock con las
-    mismas dimensiones del volumen real. Si no, genera archivos pequeños
-    placeholder.
-
-    Args:
-        output_dir: Directorio donde guardar los archivos de salida.
-        preprocessed_data: Dict con el tensor preprocesado (key "image"),
-                          o None si no hay datos reales.
-    """
-    if not MONAI_AVAILABLE:
-        # Sin SimpleITK: crear archivos vacíos como placeholder
-        for filename in ["mask.nii.gz", "uncertainty.nii.gz"]:
-            filepath = output_dir / filename
-            filepath.touch(exist_ok=True)
-        logger.info(f"Archivos placeholder vacíos creados en: {output_dir}")
-        return
-
-    # Determinar dimensiones de la máscara
-    if preprocessed_data is not None and "image" in preprocessed_data:
-        # Usar las dimensiones reales del volumen preprocesado
-        img_tensor = preprocessed_data["image"]
-        # Tensor shape es (C, H, W, D) — extraer dimensiones espaciales
-        spatial_shape = img_tensor.shape[1:]  # (H, W, D)
-        logger.info(
-            f"Generando máscara mock con dimensiones del volumen real: "
-            f"{list(spatial_shape)}"
-        )
-
-        # Máscara de segmentación mock: ceros con una región central marcada
-        mask_array = np.zeros(spatial_shape, dtype=np.uint8)
-        # Simular una lesión en la región central (~10% del volumen)
-        h, w, d = spatial_shape
-        ch, cw, cd = h // 2, w // 2, d // 2
-        rh, rw, rd = max(h // 10, 2), max(w // 10, 2), max(d // 10, 2)
-        mask_array[
-            ch - rh : ch + rh,
-            cw - rw : cw + rw,
-            cd - rd : cd + rd,
-        ] = 1
-
-        # Extraer spacing del volumen preprocesado (si disponible via meta)
-        spacing = TARGET_SPACING
-        if hasattr(img_tensor, "meta") and "pixdim" in img_tensor.meta:
-            spacing = tuple(img_tensor.meta["pixdim"][1:4].tolist())
-
-    else:
-        # Fallback: volumen mock pequeño (8x8x8)
-        logger.info("Sin datos preprocesados — generando máscara mock 8x8x8")
-        mask_array = np.zeros((8, 8, 8), dtype=np.uint8)
-        mask_array[3:5, 3:5, 3:5] = 1
-        spacing = TARGET_SPACING
-
-    # Escribir máscara de segmentación NIfTI
-    mask_image = sitk.GetImageFromArray(mask_array)
-    mask_image.SetSpacing(spacing)
-    mask_path = output_dir / "mask.nii.gz"
-    sitk.WriteImage(mask_image, str(mask_path))
-    logger.info(f"Máscara de segmentación guardada: {mask_path}")
-
-    # Escribir mapa de incertidumbre NIfTI (valores bajos aleatorios)
-    uncertainty_array = (
-        np.random.rand(*mask_array.shape).astype(np.float32) * 0.1
-    )
-    uncertainty_image = sitk.GetImageFromArray(uncertainty_array)
-    uncertainty_image.SetSpacing(spacing)
-    uncertainty_path = output_dir / "uncertainty.nii.gz"
-    sitk.WriteImage(uncertainty_image, str(uncertainty_path))
-    logger.info(f"Mapa de incertidumbre guardado: {uncertainty_path}")
-
