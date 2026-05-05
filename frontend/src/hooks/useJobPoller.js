@@ -27,6 +27,11 @@ export function useJobPoller(jobId, intervalMs = 3000) {
   const [progress, setProgress] = useState(0);
   const [isPolling, setIsPolling] = useState(false);
   const [error, setError] = useState(null);
+  // Tracks which job the current data/status belongs to.
+  // This is NOT the same as jobId (the prop) — it only updates when real
+  // API data arrives, preventing stale data from a previous job from being
+  // read as valid data for the new job during React's async state transitions.
+  const [dataJobId, setDataJobId] = useState(null);
   const intervalRef = useRef(null);
 
   // Terminal states — stop polling when reached
@@ -46,6 +51,7 @@ export function useJobPoller(jobId, intervalMs = 3000) {
     try {
       const result = await getJobStatus(jobId);
       setData(result);
+      setDataJobId(jobId); // Mark that this data belongs to jobId
 
       const jobStatus = result?.job_info?.status || "UNKNOWN";
       const jobProgress = result?.job_info?.progress_percentage || 0;
@@ -71,11 +77,12 @@ export function useJobPoller(jobId, intervalMs = 3000) {
       return;
     }
 
-    // Reset state for new job
+    // Reset ALL state for new job, including dataJobId
     setData(null);
     setStatus("");
     setProgress(0);
     setError(null);
+    setDataJobId(null); // Critical: clear data ownership before first poll
     setIsPolling(true);
 
     // Immediate first poll
@@ -88,6 +95,9 @@ export function useJobPoller(jobId, intervalMs = 3000) {
   }, [jobId, intervalMs, poll, stopPolling]);
 
   return {
+    // polledJobId is the job that the current data BELONGS TO.
+    // It is null until the first real API response arrives for the current jobId.
+    polledJobId: dataJobId,
     data,
     status,
     progress,
