@@ -56,6 +56,8 @@ export default function App() {
   const [activeJobId, setActiveJobId] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
+  // Stores completed results keyed by jobId so they persist after polling stops
+  const [completedResults, setCompletedResults] = useState({});
 
   // --- Sidebar collapsed state (lifted up for layout sync) ---
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -72,11 +74,15 @@ export default function App() {
     clinicalResults,
     artifacts,
     stateHistory,
+    polledJobId,
   } = useJobPoller(pollingJobId, 3000);
 
   // Update job in list when poller returns new data
   useEffect(() => {
-    if (!pollingJobId || !polledStatus) return;
+    // Guard: only apply updates when the poller's data matches the job we're tracking.
+    // Without this, stale "COMPLETED" data from a previous job can bleed into a new job
+    // due to async React state updates (race condition).
+    if (!pollingJobId || !polledStatus || polledJobId !== pollingJobId) return;
 
     setJobs((prev) =>
       prev.map((job) =>
@@ -86,11 +92,15 @@ export default function App() {
       )
     );
 
-    // Auto-select completed job for results
+    // When job completes, persist results in state and auto-select it
     if (polledStatus === "COMPLETED") {
+      setCompletedResults((prev) => ({
+        ...prev,
+        [pollingJobId]: { clinicalResults, artifacts, stateHistory },
+      }));
       setActiveJobId(pollingJobId);
     }
-  }, [pollingJobId, polledStatus, polledProgress]);
+  }, [pollingJobId, polledJobId, polledStatus, polledProgress, clinicalResults, artifacts, stateHistory]);
 
   // --- Submit Handler ---
   const handleSubmit = useCallback(
@@ -106,13 +116,16 @@ export default function App() {
           studyUid,
         });
 
-        // Add job to tracked list
+        // Add job to tracked list.
+        // IMPORTANT: Always initialize with "QUEUED" regardless of the API response.
+        // The POST /segment response status may not be reliable as the initial UI state,
+        // and using it caused the "immediately COMPLETED" bug due to stale API data.
         const newJob = {
           id: response.job_id,
           patientId,
           folderName,
           fileCount,
-          status: response.status,
+          status: "QUEUED",
           progress: 0,
           createdAt: new Date().toISOString(),
         };
@@ -138,11 +151,9 @@ export default function App() {
     }
   }, [jobs]);
 
-  // --- Get the selected job's results (from the poller) ---
-  const selectedJobResults =
-    activeJobId === pollingJobId || activeJobId === jobs.find(j => j.status === "COMPLETED")?.id
-      ? { clinicalResults, artifacts, stateHistory }
-      : null;
+  // --- Get the selected job's results ---
+  // Use persisted completedResults so they remain visible after polling stops.
+  const selectedJobResults = activeJobId ? (completedResults[activeJobId] ?? null) : null;
 
   // --- View Titles ---
   const VIEW_TITLES = {
