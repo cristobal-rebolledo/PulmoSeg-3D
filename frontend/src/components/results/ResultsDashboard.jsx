@@ -1,8 +1,25 @@
 import { useState } from "react";
 import MetricsPanel from "./MetricsPanel";
 import ViewerPanel from "./ViewerPanel";
-import { Award, Terminal, ChevronDown, ChevronUp } from "lucide-react";
+import { Award, Terminal, ChevronDown, ChevronUp, Timer, Cpu, FlaskConical } from "lucide-react";
 import DicomCanvasViewer from "@/components/viewer/DicomCanvasViewer";
+
+/**
+ * Calculates duration in seconds between two state labels in stateHistory.
+ * Returns null if either state is not found.
+ */
+function getDuration(stateHistory, fromState, toState) {
+  const from = stateHistory?.find((e) => e.state === fromState);
+  const to   = stateHistory?.find((e) => e.state === toState);
+  if (!from || !to) return null;
+  return (new Date(to.time) - new Date(from.time)) / 1000;
+}
+
+/** Format seconds → "00.0s" */
+function fmtSec(s) {
+  if (s === null || s === undefined) return "—";
+  return `${s.toFixed(1)}s`;
+}
 
 /**
  * ResultsDashboard — Full results panel activated when a job completes.
@@ -86,6 +103,68 @@ export default function ResultsDashboard({ clinicalResults, artifacts, stateHist
 
       {/* --- Clinical Metrics --- */}
       <MetricsPanel clinicalResults={clinicalResults} />
+
+      {/* --- Processing Time Bar --- */}
+      {stateHistory?.length > 0 && (() => {
+        const totalTime   = getDuration(stateHistory, "QUEUED",      "COMPLETED");
+        const procTime    = getDuration(stateHistory, "PROCESSING",  "COMPLETED");
+        const queuedTime  = getDuration(stateHistory, "QUEUED",      "PROCESSING");
+        return (
+          <div
+            className="glass-card animate-[fade-in_0.5s_ease-out]"
+            style={{ padding: "1rem 1.25rem", animationDelay: "350ms", animationFillMode: "both" }}
+          >
+            <div className="flex items-center gap-2 mb-3">
+              <Timer className="w-4 h-4" style={{ color: "var(--text-accent)" }} />
+              <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>
+                Tiempo de Procesamiento
+              </span>
+              {totalTime !== null && (
+                <span
+                  className="ml-auto text-xs font-mono font-semibold"
+                  style={{ color: "oklch(0.72 0.19 155)" }}
+                >
+                  Total: {fmtSec(totalTime)}
+                </span>
+              )}
+            </div>
+
+            <div className="flex gap-3">
+              {/* Queue wait */}
+              <div
+                className="flex items-center gap-2 flex-1 rounded-lg px-3 py-2"
+                style={{ backgroundColor: "var(--bg-input)", border: "1px solid var(--border-subtle)" }}
+              >
+                <div className="w-7 h-7 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: "oklch(0.60 0.10 270 / 0.15)" }}>
+                  <Timer size={12} style={{ color: "oklch(0.60 0.10 270)" }} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-medium" style={{ color: "var(--text-muted)" }}>En Cola</p>
+                  <p className="text-sm font-mono font-semibold" style={{ color: "oklch(0.60 0.10 270)" }}>
+                    {fmtSec(queuedTime)}
+                  </p>
+                </div>
+              </div>
+
+              {/* Inference */}
+              <div
+                className="flex items-center gap-2 flex-1 rounded-lg px-3 py-2"
+                style={{ backgroundColor: "var(--bg-input)", border: "1px solid var(--border-subtle)" }}
+              >
+                <div className="w-7 h-7 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: "oklch(0.72 0.17 195 / 0.15)" }}>
+                  <Cpu size={12} style={{ color: "oklch(0.72 0.17 195)" }} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-medium" style={{ color: "var(--text-muted)" }}>Inferencia + Post-proc.</p>
+                  <p className="text-sm font-mono font-semibold" style={{ color: "oklch(0.72 0.17 195)" }}>
+                    {fmtSec(procTime)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* --- Multiplanar Viewer --- */}
       {/* Si el backend proveyó dicom_image_ids, usar el visor DicomCanvasViewer real.
