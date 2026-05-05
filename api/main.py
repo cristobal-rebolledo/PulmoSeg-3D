@@ -1,0 +1,603 @@
+"""
+main.py — Entrypoint FastAPI para PulmoSeg 3D (Entorno de Desarrollo Local).
+
+Endpoints implementados:
+  POST /segment              → Crea un Job de segmentación (HTTP 202 Accepted)
+  GET  /status/{id}          → Consulta el estado actual de un Job
+  GET  /dicom/{job_id}/{fn}  → Sirve un slice DICOM (protegido por API Key)
+  GET  /nifti/{job_id}       → Sirve la máscara NIfTI de segmentación (protegido por API Key)
+  GET  /volume/{job_id}      → Sirve el volumen CT isotrópico 1×1×1 mm (protegido por API Key)
+  GET  /health               → Healthcheck básico
+
+Seguridad:
+  - job_id usa UUID v4 puro para URLs imposibles de adivinar por fuerza bruta.
+  - Los endpoints de archivos médicos (DICOM, NIfTI) validan el header
+    X-API-Key contra la variable de entorno PULMOSEG_API_KEY.
+  - Los archivos DICOM se conservan en temp_{job_id}/ para re-análisis clínico.
+"""
+
+import logging
+import os
+import shutil
+import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import List
+
+from dotenv import load_dotenv
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Header,
+    UploadFile,
+)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
+
+from api.database import SegmentationJob, create_tables, get_db
+from api.schemas import (
+    Artifacts,
+    ClinicalResults,
+    JobInfo,
+    JobTimestamps,
+    RecistMetrics,
+    SegmentationJobResponse,
+    SegmentationResultResponse,
+    StateHistoryEntry,
+    VolumetricData,
+)
+from worker.background_task import run_segmentation_job
+
+# ---------------------------------------------------------------------------
+# Cargar variables de entorno desde .env
+# ---------------------------------------------------------------------------
+load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("pulmoseg.api")
+
+# ---------------------------------------------------------------------------
+# Configuración de seguridad — API Key estática desde .env
+# ---------------------------------------------------------------------------
+API_KEY = os.environ.get("PULMOSEG_API_KEY", "")
+if not API_KEY:
+    logger.warning(
+        "⚠️  PULMOSEG_API_KEY no está configurada. "
+        "Los endpoints de archivos médicos estarán desprotegidos."
+    )
+
+# ---------------------------------------------------------------------------
+# Directorios de almacenamiento local (simulan buckets de GCS)
+# ---------------------------------------------------------------------------
+LOCAL_STORAGE_BASE = Path("local_storage")
+LOCAL_STORAGE_DIRS = [
+    LOCAL_STORAGE_BASE / "inputs",   # Simula GCS bucket de entrada (DICOM)
+    LOCAL_STORAGE_BASE / "outputs",  # Simula GCS bucket de salida (NIfTI)
+    LOCAL_STORAGE_BASE / "models",   # Simula GCS bucket de pesos del modelo
+]
+
+
+# ---------------------------------------------------------------------------
+# Dependencia de seguridad — Verificación de API Key
+# ---------------------------------------------------------------------------
+def verify_api_key(x_api_key: str = Header(..., alias="X-API-Key")) -> None:
+    """
+    Dependencia FastAPI que verifica el header X-API-Key.
+
+    Lanza HTTP 403 si la clave no coincide con PULMOSEG_API_KEY.
+    Se aplica únicamente a los endpoints de servicio de archivos médicos
+    (DICOM y NIfTI), que no deben ser públicamente accesibles.
+
+    Uso:
+        @app.get("/dicom/{job_id}/{filename}")
+        async def serve_dicom(..., _=Depends(verify_api_key)):
+            ...
+    """
+    if not API_KEY:
+        # Si la clave no está configurada en .env, bloquear siempre
+        raise HTTPException(
+            status_code=403,
+            detail="API Key no configurada en el servidor. "
+                   "Agrega PULMOSEG_API_KEY al archivo .env.",
+        )
+    if x_api_key != API_KEY:
+        raise HTTPException(
+            status_code=403,
+            detail="API Key inválida.",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Lifespan: inicialización al arrancar el servidor
+# ---------------------------------------------------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Evento de startup de FastAPI.
+    1. Crea las tablas SQLite si no existen.
+    2. Crea los directorios de local_storage si no existen.
+    """
+    # 1. Crear tablas SQLite
+    logger.info("Inicializando base de datos SQLite...")
+    create_tables()
+    logger.info("Base de datos lista: local_jobs.db")
+
+    # 2. Crear directorios de almacenamiento local
+    for dir_path in LOCAL_STORAGE_DIRS:
+        dir_path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Directorio de almacenamiento verificado: {dir_path}")
+
+    logger.info("PulmoSeg 3D API lista para recibir solicitudes.")
+    yield
+    # Cleanup (si fuera necesario en el futuro)
+    logger.info("Apagando PulmoSeg 3D API...")
+
+
+# ---------------------------------------------------------------------------
+# Instancia de la aplicación FastAPI
+# ---------------------------------------------------------------------------
+app = FastAPI(
+    title="PulmoSeg 3D — API de Segmentación Pulmonar",
+    description=(
+        "API Gateway para el sistema de segmentación 3D de lesiones pulmonares. "
+        "Fase 1: Entorno de Desarrollo Local. "
+        "Sustituye GCP (Firestore, GCS, Pub/Sub) por SQLite, filesystem y BackgroundTasks."
+    ),
+    version="1.1.0-local",
+    lifespan=lifespan,
+)
+
+# ---------------------------------------------------------------------------
+# CORS Middleware — Permite al frontend React (Vite) comunicarse con la API
+# ---------------------------------------------------------------------------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ===========================================================================
+# Endpoint: POST /segment
+# ===========================================================================
+@app.post(
+    "/segment",
+    response_model=SegmentationJobResponse,
+    status_code=202,
+    summary="Crear un Job de Segmentación (Multipart Upload)",
+    description=(
+        "Recibe los archivos DICOM reales via multipart/form-data, "
+        "los guarda en un directorio permanente temp_{job_id}/, crea el registro "
+        "en SQLite con estado QUEUED, lanza la tarea en segundo plano y retorna "
+        "HTTP 202 Accepted con el job_id (UUID v4)."
+    ),
+)
+async def create_segmentation_job(
+    background_tasks: BackgroundTasks,
+    files: List[UploadFile] = File(
+        ..., description="Archivos DICOM (.dcm) del estudio a segmentar"
+    ),
+    patient_pseudo_id: str = Form(
+        "unknown", description="ID pseudoanonimizado del paciente"
+    ),
+    study_instance_uid: str = Form(
+        "unknown", description="UID del estudio DICOM"
+    ),
+    db: Session = Depends(get_db),
+):
+    """
+    Flujo Multipart Upload:
+    1. Genera un job_id UUID v4 puro (ej: "f47ac10b-58cc-4372-a567-0e02b2c3d479").
+    2. Crea directorio permanente local_storage/inputs/temp_{job_id}/.
+    3. Guarda allí todos los archivos binarios recibidos.
+    4. Crea registro en SQLite con estado QUEUED.
+    5. Lanza BackgroundTask con la ruta al directorio.
+    6. Retorna 202 Accepted inmediatamente.
+
+    Los archivos DICOM se conservan en disco para permitir re-análisis clínico
+    y visualización posterior con Cornerstone3D sin re-ejecutar el modelo.
+    """
+    # --- 1. Generar job_id UUID v4 puro ---
+    # UUID v4 completo: 2^122 posibilidades, imposible de adivinar por fuerza bruta.
+    # Sin prefijos secuenciales (ej: req_1, req_2) que faciliten la enumeración.
+    job_id = str(uuid.uuid4())
+
+    # --- 2. Crear directorio para los DICOM subidos ---
+    # Se mantiene permanentemente para re-análisis y visualización con Cornerstone3D
+    temp_dicom_dir = LOCAL_STORAGE_BASE / "inputs" / f"temp_{job_id}"
+    temp_dicom_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- 3. Guardar archivos binarios ---
+    saved_count = 0
+    total_bytes = 0
+
+    try:
+        for upload_file in files:
+            # Usar solo el nombre del archivo (sin ruta relativa del directorio)
+            filename = Path(upload_file.filename).name if upload_file.filename else f"file_{saved_count}.dcm"
+            file_path = temp_dicom_dir / filename
+
+            content = await upload_file.read()
+            with open(file_path, "wb") as out_file:
+                out_file.write(content)
+            total_bytes += len(content)
+            saved_count += 1
+
+        logger.info(
+            f"[{job_id}] {saved_count} archivos DICOM guardados en {temp_dicom_dir} "
+            f"({total_bytes / (1024 * 1024):.1f} MB total)"
+        )
+
+    except Exception as e:
+        shutil.rmtree(temp_dicom_dir, ignore_errors=True)
+        logger.error(f"[{job_id}] Error guardando archivos: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error guardando archivos DICOM: {e}",
+        )
+
+    if saved_count == 0:
+        shutil.rmtree(temp_dicom_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=400,
+            detail="No se recibieron archivos DICOM válidos.",
+        )
+
+    # --- 4. Construir request_data para registro en DB ---
+    request_data = {
+        "patient_pseudo_id": patient_pseudo_id,
+        "study_instance_uid": study_instance_uid,
+        "dicom_source": {
+            "gcs_bucket": "local-upload",
+            "gcs_prefix": str(temp_dicom_dir),
+            "series_instance_uid": study_instance_uid,
+            "expected_file_count": saved_count,
+        },
+        "dicom_temp_dir": str(temp_dicom_dir),
+    }
+
+    # --- 5. Crear registro en SQLite ---
+    new_job = SegmentationJob(
+        job_id=job_id,
+        status="QUEUED",
+        progress_percentage=0,
+    )
+    new_job.set_request_data(request_data)
+    new_job.add_state_entry("QUEUED")
+
+    db.add(new_job)
+    db.commit()
+    db.refresh(new_job)
+
+    logger.info(f"Job creado: {job_id} | Status: QUEUED | Files: {saved_count}")
+
+    # --- 6. Lanzar tarea en segundo plano ---
+    background_tasks.add_task(
+        run_segmentation_job,
+        job_id=job_id,
+        request_data=request_data,
+        dicom_dir=str(temp_dicom_dir),
+    )
+
+    logger.info(f"BackgroundTask lanzada para Job: {job_id}")
+
+    # --- 7. Retornar 202 Accepted ---
+    return SegmentationJobResponse(
+        job_id=job_id,
+        status="QUEUED",
+        message=f"Segmentation job queued: {saved_count} DICOM files received",
+    )
+
+
+# ===========================================================================
+# Endpoint: GET /status/{job_id}
+# ===========================================================================
+@app.get(
+    "/status/{job_id}",
+    response_model=SegmentationResultResponse,
+    summary="Consultar estado de un Job",
+    description=(
+        "Consulta la base de datos SQLite y retorna el estado actual "
+        "del Job. Si está COMPLETED, incluye clinical_results y artifacts "
+        "(con dicom_image_ids para Cornerstone3D)."
+    ),
+)
+def get_job_status(
+    job_id: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Retorna el estado actual del Job, incluyendo:
+    - job_info: ID, status, timestamps, progreso
+    - clinical_results: Solo si COMPLETED (volúmenes, métricas RECIST)
+    - artifacts: Solo si COMPLETED (rutas a archivos + dicom_image_ids)
+    - state_history: Historial completo de transiciones de estado
+    - error_message: Solo si FAILED
+    """
+    # Buscar el Job en la base de datos
+    job = db.query(SegmentationJob).filter(
+        SegmentationJob.job_id == job_id
+    ).first()
+
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job not found: {job_id}",
+        )
+
+    # --- Construir job_info ---
+    job_info = JobInfo(
+        job_id=job.job_id,
+        status=job.status,
+        progress_percentage=job.progress_percentage,
+        timestamps=JobTimestamps(
+            received_at=job.created_at.isoformat() if job.created_at else "",
+            completed_at=job.updated_at.isoformat()
+            if job.status == "COMPLETED" and job.updated_at
+            else None,
+        ),
+    )
+
+    # --- Construir state_history ---
+    state_history = [
+        StateHistoryEntry(state=entry["state"], time=entry["time"])
+        for entry in job.get_state_history()
+    ]
+
+    # --- Construir clinical_results y artifacts (solo si COMPLETED) ---
+    clinical_results = None
+    artifacts = None
+
+    if job.status == "COMPLETED":
+        result = job.get_result_data()
+        if result:
+            # Extraer clinical_results del resultado almacenado
+            cr = result.get("clinical_results")
+            if cr:
+                clinical_results = ClinicalResults(
+                    lesion_id=cr["lesion_id"],
+                    volumetric_data=VolumetricData(**cr["volumetric_data"]),
+                    recist_metrics=RecistMetrics(**cr["recist_metrics"]),
+                )
+
+            # Extraer artifacts del resultado almacenado
+            art = result.get("artifacts")
+            if art:
+                artifacts = Artifacts(
+                    segmentation_mask_nifti_url=art["segmentation_mask_nifti_url"],
+                    uncertainty_map_url=art.get("uncertainty_map_url"),
+                    dicom_image_ids=art.get("dicom_image_ids"),
+                )
+
+    return SegmentationResultResponse(
+        job_info=job_info,
+        clinical_results=clinical_results,
+        artifacts=artifacts,
+        state_history=state_history,
+        error_message=job.error_message,
+    )
+
+
+# ===========================================================================
+# Endpoint: GET /dicom/{job_id}/{filename}
+# Protegido por API Key — sirve slices DICOM para Cornerstone3D
+# ===========================================================================
+@app.get(
+    "/dicom/{job_id}/{filename}",
+    summary="Servir slice DICOM",
+    description=(
+        "Sirve un archivo DICOM individual del directorio del job. "
+        "Requiere el header X-API-Key para acceso. "
+        "Cornerstone3D lo consume vía wado: URI scheme."
+    ),
+)
+async def serve_dicom_file(
+    job_id: str,
+    filename: str,
+    _: None = Depends(verify_api_key),
+):
+    """
+    Sirve un archivo .dcm del directorio local_storage/inputs/temp_{job_id}/.
+
+    Seguridad:
+    - job_id es un UUID v4 opaco: imposible de enumerar por fuerza bruta.
+    - Requiere X-API-Key válida en el header.
+    - Valida que el filename no contenga path traversal (../).
+    """
+    # Prevenir path traversal
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Nombre de archivo inválido.")
+
+    dicom_path = LOCAL_STORAGE_BASE / "inputs" / f"temp_{job_id}" / filename
+
+    if not dicom_path.exists() or not dicom_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Archivo DICOM no encontrado: {filename}",
+        )
+
+    return FileResponse(
+        path=str(dicom_path),
+        media_type="application/dicom",
+        filename=filename,
+    )
+
+
+# ===========================================================================
+# Endpoint: GET /nifti/{job_id}
+# Protegido por API Key — sirve máscara de segmentación NIfTI
+# ===========================================================================
+@app.get(
+    "/nifti/{job_id}",
+    summary="Servir máscara de segmentación NIfTI",
+    description=(
+        "Sirve el archivo .nii.gz de segmentación generado para el job. "
+        "Requiere el header X-API-Key para acceso. "
+        "Cornerstone3D lo consume vía el nifti-volume-loader."
+    ),
+)
+async def serve_nifti_file(
+    job_id: str,
+    _: None = Depends(verify_api_key),
+    db: Session = Depends(get_db),
+):
+    """
+    Sirve el archivo NIfTI de segmentación desde local_storage/outputs/{job_id}/.
+
+    Seguridad:
+    - job_id es un UUID v4 opaco.
+    - Requiere X-API-Key válida en el header.
+    - Verifica que el job exista en la DB antes de servir el archivo.
+    """
+    # Verificar que el job existe
+    job = db.query(SegmentationJob).filter(
+        SegmentationJob.job_id == job_id
+    ).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job no encontrado: {job_id}")
+
+    if job.status != "COMPLETED":
+        raise HTTPException(
+            status_code=409,
+            detail=f"El job {job_id} aún no está COMPLETED (estado: {job.status}). "
+                   "La segmentación debe completarse antes de acceder al NIfTI.",
+        )
+
+    # Buscar el archivo NIfTI en el directorio de salida
+    output_dir = LOCAL_STORAGE_BASE / "outputs" / job_id
+    nifti_candidates = list(output_dir.glob("*.nii.gz")) if output_dir.exists() else []
+
+    if not nifti_candidates:
+        # Fallback: buscar en result_data del job
+        result = job.get_result_data()
+        if result:
+            nifti_url = result.get("artifacts", {}).get("segmentation_mask_nifti_url", "")
+            nifti_path = Path(nifti_url) if nifti_url else None
+            if nifti_path and nifti_path.exists():
+                return FileResponse(
+                    path=str(nifti_path),
+                    media_type="application/gzip",
+                    filename=nifti_path.name,
+                )
+
+        raise HTTPException(
+            status_code=404,
+            detail=f"Archivo NIfTI no encontrado para el job {job_id}.",
+        )
+
+    # Usar el primer (y normalmente único) archivo NIfTI encontrado
+    nifti_path = nifti_candidates[0]
+
+    return FileResponse(
+        path=str(nifti_path),
+        media_type="application/gzip",
+        filename=nifti_path.name,
+    )
+
+
+# ===========================================================================
+# Endpoint: GET /volume/{job_id}
+# Protegido por API Key — sirve el volumen CT isotrópico (1×1×1 mm) en NIfTI
+# ===========================================================================
+@app.get(
+    "/volume/{job_id}",
+    summary="Servir volumen CT isotrópico (NIfTI)",
+    description=(
+        "Sirve el archivo volume_iso.nii.gz generado por el pipeline tras "
+        "el resampling a 1×1×1 mm con SimpleITK. "
+        "Si el ISO no existe, sirve volume.nii.gz (spacing original). "
+        "Requiere el header X-API-Key para acceso."
+    ),
+)
+async def serve_volume(
+    job_id: str,
+    _: None = Depends(verify_api_key),
+    db: Session = Depends(get_db),
+):
+    """
+    Sirve el volumen CT isotrópico para visualización MPR en el frontend.
+
+    Prioridad de búsqueda:
+    1. local_storage/outputs/{job_id}/volume_iso.nii.gz  ← remuestreado a 1 mm
+    2. local_storage/outputs/{job_id}/volume.nii.gz      ← spacing original
+
+    Seguridad:
+    - job_id es un UUID v4 opaco.
+    - Requiere X-API-Key válida en el header.
+    - Verifica que el job exista en la DB y esté COMPLETED.
+    """
+    job = db.query(SegmentationJob).filter(
+        SegmentationJob.job_id == job_id
+    ).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job no encontrado: {job_id}")
+
+    if job.status != "COMPLETED":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"El job {job_id} aún no está COMPLETED (estado: {job.status}). "
+                "El volumen estará disponible cuando la segmentación finalice."
+            ),
+        )
+
+    output_dir = LOCAL_STORAGE_BASE / "outputs" / job_id
+
+    # Preferir el volumen isotrópico; fallback al original
+    iso_path = output_dir / "volume_iso.nii.gz"
+    raw_path = output_dir / "volume.nii.gz"
+
+    if iso_path.exists() and iso_path.stat().st_size > 0:
+        volume_path = iso_path
+        logger.info(f"[{job_id}] Sirviendo volumen isotrópico: {iso_path}")
+    elif raw_path.exists() and raw_path.stat().st_size > 0:
+        volume_path = raw_path
+        logger.info(
+            f"[{job_id}] volume_iso.nii.gz no encontrado, sirviendo volume.nii.gz"
+        )
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Volumen CT no encontrado para el job {job_id}.",
+        )
+
+    return FileResponse(
+        path=str(volume_path),
+        media_type="application/gzip",
+        filename=volume_path.name,
+    )
+
+
+# ===========================================================================
+# Endpoint: GET /health
+# ===========================================================================
+@app.get(
+    "/health",
+    summary="Healthcheck",
+    description="Verifica que la API está activa. Compatible con Docker HEALTHCHECK.",
+)
+def health_check():
+    """Retorna un JSON simple indicando que el servicio está activo."""
+    return {
+        "status": "healthy",
+        "service": "PulmoSeg 3D API",
+        "version": "1.1.0-local",
+    }

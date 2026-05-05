@@ -1,0 +1,27 @@
+{
+  "job_info": {
+    "job_id": "req_550e8400-e29b-41d4-a716-446655440000",
+    "status": "COMPLETED",
+    "timestamps": {
+      "received_at": "2026-04-07T21:15:00Z",
+      "completed_at": "2026-04-07T21:16:12Z"
+    }
+  },
+  "clinical_results": {
+    "lesion_id": "L1_RUL",
+    "volumetric_data": {
+      "volume_mm3": 4150.25,
+      "volume_ml": 4.15
+    },
+    "recist_metrics": {
+      "measurement_plane": "AXIAL",
+      "longest_diameter_mm": 24.3,
+      "perpendicular_diameter_mm": 15.1,
+      "confidence_score": 0.94
+    }
+  },
+  "artifacts": {
+    "segmentation_mask_nifti_url": "https://storage.googleapis.com/gcs_out/mask.nii.gz?...",
+    "uncertainty_map_url": "https://storage.googleapis.com/gcs_out/uncertainty.nii.gz?..."
+  }
+}

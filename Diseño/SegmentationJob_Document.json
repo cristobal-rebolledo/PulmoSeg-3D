@@ -1,0 +1,18 @@
+{
+  "job_id": "req_550e8400-e29b-41d4-a716-446655440000",
+  "status": "PROCESSING",
+  "progress_percentage": 45,
+  "request_data": { "...": "datos_del_request_v2" },
+  "worker_details": {
+    "instance_id": "vertex-gpu-worker-01",
+    "model_hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "frameworks": {
+      "monai": "1.3.0",
+      "torch": "2.1.0+cu118"
+    }
+  },
+  "state_history": [
+    { "state": "QUEUED", "time": "2026-04-07T21:15:00Z" },
+    { "state": "PROCESSING", "time": "2026-04-07T21:15:10Z" }
+  ]
+}
