@@ -2,6 +2,10 @@
 local_storage/
 local_jobs.db
 
+# Docker (archivos que SÍ se versionan: Dockerfile, docker-compose.yml, .env.example)
+# Asegurar que .env.example NO sea ignorado aunque .env sí lo sea
+!.env.example
+
 # Python (Backend & Worker)
 __pycache__/
 *.py[cod]

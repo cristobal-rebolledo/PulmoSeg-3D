@@ -159,14 +159,26 @@ app = FastAPI(
 )
 
 # ---------------------------------------------------------------------------
-# CORS Middleware — Permite al frontend React (Vite) comunicarse con la API
+# CORS Middleware — Permite al frontend React (Vite/Nginx) comunicarse con la API
+#
+# CORS_ORIGINS: lista de orígenes permitidos separados por coma.
+# Ejemplos:
+#   Desarrollo local:  CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+#   Docker (Nginx):    CORS_ORIGINS=http://localhost,http://localhost:80
+#   Producción (GCP):  CORS_ORIGINS=https://pulmoseg.example.com
 # ---------------------------------------------------------------------------
+_raw_cors_origins = os.environ.get(
+    "CORS_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173",
+)
+CORS_ORIGINS: list[str] = [
+    origin.strip() for origin in _raw_cors_origins.split(",") if origin.strip()
+]
+logger.info(f"CORS orígenes permitidos: {CORS_ORIGINS}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

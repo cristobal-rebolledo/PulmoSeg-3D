@@ -1,0 +1,133 @@
+# ===========================================================================
+# docker-compose.yml — Orquestación PulmoSeg-3D
+#
+# Servicios:
+#   backend   → FastAPI + Worker MONAI (Python/PyTorch)  :8000
+#   frontend  → React SPA servida por Nginx              :80
+#
+# Red interna: pulmoseg_net
+#   El frontend hace proxy de /api/ → http://backend:8000/
+#   Los contenedores se comunican por nombre de servicio (DNS interno Docker)
+#
+# Volúmenes:
+#   ./local_storage → /app/local_storage  (bind mount: DICOM, NIfTI, modelos)
+#
+# GPU (WSL2 + NVIDIA):
+#   Requiere nvidia-container-toolkit instalado en WSL2.
+#   Si no hay GPU disponible, eliminar la sección `deploy.resources`.
+#   El pipeline detecta CUDA en runtime y cae a CPU si no está disponible.
+#
+# Uso:
+#   Iniciar:    docker compose up -d
+#   Detener:    docker compose down
+#   Logs:       docker compose logs -f
+#   Rebuild:    docker compose build --no-cache
+#   Solo API:   docker compose up -d backend
+# ===========================================================================
+
+services:
+
+  # ===========================================================================
+  # Servicio: Backend — FastAPI + Worker MONAI
+  # ===========================================================================
+  backend:
+    build:
+      context: .                      # Raíz del proyecto (donde está el Dockerfile)
+      dockerfile: Dockerfile
+    image: pulmoseg-backend:latest
+    container_name: pulmoseg-backend
+
+    ports:
+      - "8000:8000"                   # Expuesto para acceso directo a la API (docs, debug)
+
+    environment:
+      # --- Seguridad ---
+      - PULMOSEG_API_KEY=${PULMOSEG_API_KEY}
+
+      # --- CORS: orígenes permitidos (separados por coma) ---
+      # Incluye tanto Nginx (:80) como acceso directo a la API (:5173 para dev local)
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost,http://localhost:80,http://127.0.0.1,http://localhost:5173}
+
+      # --- Base de datos ---
+      # Ruta absoluta dentro del volumen montado para persistencia entre reinicios.
+      # 4 slashes = URL SQLite para ruta absoluta: sqlite:/// + /ruta/absoluta
+      - DATABASE_URL=sqlite:////app/local_storage/local_jobs.db
+
+      # --- MONAI: desactivar descarga automática de datasets de ejemplo ---
+      - MONAI_DATA_DIRECTORY=/app/local_storage/models
+
+    volumes:
+      # Bind mount del directorio de almacenamiento completo.
+      # Esto expone inputs/, outputs/ y models/ desde el host al contenedor.
+      # Los pesos del modelo en local_storage/models/ son accesibles directamente.
+      # Los datos generados (DICOM subidos, NIfTI de salida) persisten en el host.
+      - ./local_storage:/app/local_storage
+
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s               # PyTorch/MONAI tardan en inicializar
+      retries: 3
+
+    restart: unless-stopped
+
+    networks:
+      - pulmoseg_net
+
+    # -------------------------------------------------------------------------
+    # Acceso a GPU NVIDIA (WSL2 + nvidia-container-toolkit)
+    # -------------------------------------------------------------------------
+    # Requiere:
+    #   1. nvidia-container-toolkit instalado en WSL2
+    #   2. Docker Desktop con soporte GPU habilitado
+    #
+    # Para verificar GPU disponible:
+    #   docker run --rm --gpus all nvidia/cuda:11.8-base-ubuntu22.04 nvidia-smi
+    #
+    # Para desactivar GPU (solo CPU): comentar toda la sección `deploy`
+    # -------------------------------------------------------------------------
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all              # Usar todas las GPUs disponibles
+              capabilities: [gpu]
+
+
+  # ===========================================================================
+  # Servicio: Frontend — React SPA + Nginx
+  # ===========================================================================
+  frontend:
+    build:
+      context: ./frontend             # Directorio del frontend (donde está su Dockerfile)
+      dockerfile: Dockerfile
+      args:
+        # La API Key se inyecta en tiempo de build (Vite la embebe en el bundle JS).
+        # Debe coincidir con PULMOSEG_API_KEY del backend.
+        - VITE_API_KEY=${PULMOSEG_API_KEY}
+
+    image: pulmoseg-frontend:latest
+    container_name: pulmoseg-frontend
+
+    ports:
+      - "80:80"                       # Puerto principal del sistema
+
+    depends_on:
+      backend:
+        condition: service_healthy    # Solo arranca cuando el backend pasa el healthcheck
+
+    restart: unless-stopped
+
+    networks:
+      - pulmoseg_net
+
+
+# ===========================================================================
+# Red interna
+# ===========================================================================
+networks:
+  pulmoseg_net:
+    driver: bridge
+    name: pulmoseg_net

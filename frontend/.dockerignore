@@ -1,0 +1,47 @@
+# ===========================================================================
+# .dockerignore — Exclusiones para la imagen Docker del FRONTEND
+#
+# Contexto: directorio frontend/
+#
+# Solo se copian al contenedor (Stage 1 - builder):
+#   - package.json, package-lock.json  (dependencias)
+#   - src/, public/, index.html        (código fuente)
+#   - vite.config.js, nginx.conf       (configuración)
+#
+# La API Key viene del build argument VITE_API_KEY, NO del archivo .env.
+# ===========================================================================
+
+# --- Dependencias instaladas (se reinstalan dentro del contenedor) ---
+node_modules/
+
+# --- Bundle de producción previo (se regenera en el build) ---
+dist/
+
+# --- Variables de entorno locales (la clave viene del build arg) ---
+.env
+.env.local
+.env.*.local
+
+# --- Cache de Vite ---
+.vite/
+
+# --- Control de versiones ---
+.git/
+.gitignore
+
+# --- IDEs y editores ---
+.vscode/
+.idea/
+*.swp
+*~
+
+# --- Sistema operativo ---
+.DS_Store
+Thumbs.db
+
+# --- Documentación ---
+*.md
+
+# --- Archivos temporales ---
+*.tmp
+*.log

@@ -9,6 +9,7 @@ nativo robusto y esto es suficiente para la Fase 1 de desarrollo local.
 """
 
 import json
+import os
 from datetime import datetime, timezone
 from typing import Generator
 
@@ -18,9 +19,15 @@ from sqlalchemy.orm import Session, declarative_base, sessionmaker
 # ---------------------------------------------------------------------------
 # Configuración del Engine SQLite
 # ---------------------------------------------------------------------------
+# DATABASE_URL se lee desde la variable de entorno para soportar Docker.
+# En desarrollo local (sin Docker) usa la ruta relativa por defecto.
+# En Docker, docker-compose.yml la sobreescribe apuntando al volumen montado:
+#   DATABASE_URL=sqlite:////app/local_storage/local_jobs.db
 # check_same_thread=False es necesario para que SQLAlchemy funcione con
 # FastAPI, que puede acceder a la DB desde diferentes threads del thread pool.
-SQLALCHEMY_DATABASE_URL = "sqlite:///./local_jobs.db"
+SQLALCHEMY_DATABASE_URL = os.environ.get(
+    "DATABASE_URL", "sqlite:///./local_jobs.db"
+)
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
