@@ -534,42 +534,71 @@ def save_predicted_mask(
     """
     Guarda la máscara de segmentación predicha como mask.nii.gz.
 
-    Si hay un volumen NIfTI de referencia, copia su información espacial
-    (origin, direction) para mantener alineación geométrica.
+    Si hay un volumen NIfTI de referencia, RESAMPLEA la máscara al espacio
+    exacto del volumen original (mismo tamaño, spacing, origin y direction).
+    Esto garantiza que la máscara se superpone pixel-a-pixel con el DICOM
+    en el visor, sin importar la orientación del NIfTI o el spacing del modelo.
 
     Args:
-        mask_np: Array binario 3D (D, H, W), dtype uint8.
+        mask_np: Array binario 3D (D, H, W), dtype uint8, en espacio del modelo.
         output_dir: Directorio de salida del Job.
-        spacing: Spacing en mm del volumen procesado.
-        reference_nifti_path: Path al volumen NIfTI original para copiar
-                              metadatos espaciales.
+        spacing: Spacing en mm del volumen procesado (espacio del modelo).
+        reference_nifti_path: Path al volumen NIfTI original para alinear.
 
     Returns:
         Path al archivo mask.nii.gz generado.
     """
+    # --- Construir imagen SimpleITK en el espacio del modelo ---
     mask_image = sitk.GetImageFromArray(mask_np.astype(np.uint8))
-    mask_image.SetSpacing(spacing)
+    # SimpleITK espera spacing como (x, y, z); numpy/MONAI entrega (z, y, x)
+    # → invertimos para corregir el orden de ejes
+    mask_image.SetSpacing(tuple(reversed(spacing)))
 
-    # Copiar metadatos espaciales del volumen de referencia si existe
     if reference_nifti_path and reference_nifti_path.exists():
         try:
             ref_image = sitk.ReadImage(str(reference_nifti_path))
+
+            # --- Copiar metadatos del volumen original ---
             mask_image.SetOrigin(ref_image.GetOrigin())
             mask_image.SetDirection(ref_image.GetDirection())
-            logger.info("Metadatos espaciales copiados del volumen de referencia")
+
+            # --- Resamplear al grid exacto del volumen original ---
+            # Esto elimina cualquier desajuste de coordenadas:
+            # la máscara resultante tiene IDÉNTICAS dimensiones, spacing,
+            # origin y direction que el DICOM original.
+            resampled = sitk.Resample(
+                mask_image,                  # imagen a resamplear
+                ref_image,                   # grid de referencia (target)
+                sitk.Transform(),            # sin transformación adicional
+                sitk.sitkNearestNeighbor,    # vecino más cercano para máscara binaria
+                0,                           # valor por defecto (fondo)
+                sitk.sitkUInt8,              # tipo de salida
+            )
+            logger.info(
+                f"Máscara resampleada al espacio original: "
+                f"shape={sitk.GetArrayFromImage(resampled).shape}, "
+                f"spacing={resampled.GetSpacing()}"
+            )
+            mask_path = output_dir / "mask.nii.gz"
+            sitk.WriteImage(resampled, str(mask_path))
+            logger.info(f"Máscara predicha guardada: {mask_path}")
+            return mask_path
+
         except Exception as e:
             logger.warning(
-                f"No se pudieron copiar metadatos de referencia: {e}"
+                f"No se pudo resamplear al espacio de referencia: {e}. "
+                f"Guardando en espacio del modelo."
             )
 
+    # --- Fallback: guardar sin resamplear (solo si no hay referencia) ---
     mask_path = output_dir / "mask.nii.gz"
     sitk.WriteImage(mask_image, str(mask_path))
     logger.info(
-        f"Máscara predicha guardada: {mask_path} | "
+        f"Máscara predicha guardada (sin referencia): {mask_path} | "
         f"shape={mask_np.shape}, spacing={spacing}"
     )
-
     return mask_path
+
 
 
 def save_uncertainty_map(

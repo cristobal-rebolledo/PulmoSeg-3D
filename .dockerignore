@@ -1,0 +1,86 @@
+# ===========================================================================
+# .dockerignore — Exclusiones para la imagen Docker del BACKEND
+#
+# Contexto: directorio raíz del proyecto (.)
+#
+# Solo se copian al contenedor:
+#   - api/           (código FastAPI)
+#   - worker/        (pipeline MONAI)
+#   - requirements_local.txt
+#
+# Los datos en local_storage/ se montan como volumen en runtime.
+# ===========================================================================
+
+# --- Control de versiones ---
+.git/
+.gitignore
+
+# --- Caché de Python ---
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+
+# --- Entornos virtuales ---
+venv/
+.venv/
+env/
+ENV/
+
+# --- Almacenamiento de datos (montados como volumen Docker) ---
+local_storage/
+local_jobs.db
+
+# --- Frontend (no necesario en la imagen del backend) ---
+frontend/
+
+# --- Diseño y documentación ---
+Diseño/
+README.md
+*.md
+
+# --- Scripts de debug y test ---
+debug_pipeline.py
+test_client.py
+scratch/
+
+# --- Variables de entorno (secretos NO van en la imagen) ---
+.env
+.env.local
+.env.*.local
+
+# --- Docker (evitar recursión) ---
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# --- IDEs y editores ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+
+# --- Sistema operativo ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Pytest y cobertura ---
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# --- Jupyter ---
+*.ipynb
+.ipynb_checkpoints/
+
+# --- Archivos temporales ---
+*.tmp
+*.log
+*.pid

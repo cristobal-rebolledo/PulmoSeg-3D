@@ -66,14 +66,29 @@ async function parseNifti(buffer) {
   const nx = v.getInt16(42, true), ny = v.getInt16(44, true), nz = v.getInt16(46, true);
   const dtype = v.getInt16(70, true);
   const voxOff = Math.round(v.getFloat32(108, true));
+
+  // ── Detectar si el eje Z del NIfTI está invertido respecto al visor ──────
+  // El backend resamplea la máscara al espacio exacto del DICOM original,
+  // por lo que nx==cols y ny==rows (mapeo 1:1 en x/y).
+  // Solo queda manejar el eje Z: el visor ordena slices DESCENDENTE por Z
+  // físico (slice 0 = superior/cabeza). El sform nos dice si NIfTI z=0
+  // apunta hacia Superior (zFlip=true) o Inferior (zFlip=false).
+  const sformCode = v.getInt16(254, true);
+  let zFlip = true; // conservador: la mayoría de CTs en RAS tienen z=0=inferior
+  if (sformCode > 0) {
+    const r9 = v.getFloat32(312, true); // srow_z[2]: positivo → z crece hacia Superior
+    if (r9 !== 0) zFlip = r9 > 0;
+  }
+
   let px;
   if (dtype === 2) px = new Uint8Array(data, voxOff);
   else if (dtype === 4) px = new Int16Array(data, voxOff);
   else if (dtype === 8) px = new Int32Array(data, voxOff);
   else if (dtype === 16) px = new Float32Array(data, voxOff);
   else px = new Uint8Array(data, voxOff);
-  return { nx, ny, nz, px };
+  return { nx, ny, nz, px, zFlip };
 }
+
 
 function renderAxial(canvas, slice, wc, ww, zoom, pan, segSlice, showSeg) {
   if (!canvas || !slice) return;
@@ -195,8 +210,8 @@ function renderCoronal(canvas, slices, coronalY, wc, ww, segData, showSeg, slice
   ctx.restore();
 
   if (showSeg && segData) {
-    const { nx, ny, nz, px } = segData;
-    const yIdx = Math.round((coronalY / Math.max(rows-1,1)) * (ny-1));
+    const { nx, ny, nz, px, zFlip } = segData;
+    const yIdx = Math.min(Math.round((coronalY / Math.max(rows-1,1)) * (ny-1)), ny-1);
     const maskOff = new OffscreenCanvas(outW, outH);
     const mc = maskOff.getContext("2d");
     const si = mc.createImageData(outW, outH);
@@ -205,10 +220,12 @@ function renderCoronal(canvas, slices, coronalY, wc, ww, segData, showSeg, slice
       const zFrac = (zy / outH) * n;
       const z0 = Math.min(Math.floor(zFrac), n-1), z1 = Math.min(z0+1, n-1);
       const tz = zFrac - z0;
-      const zi0 = Math.round((z0 / Math.max(n-1,1)) * (nz-1));
-      const zi1 = Math.round((z1 / Math.max(n-1,1)) * (nz-1));
+      const t0 = zFlip ? (1 - z0/Math.max(n-1,1)) : (z0/Math.max(n-1,1));
+      const t1 = zFlip ? (1 - z1/Math.max(n-1,1)) : (z1/Math.max(n-1,1));
+      const zi0 = Math.min(Math.round(t0 * (nz-1)), nz-1);
+      const zi1 = Math.min(Math.round(t1 * (nz-1)), nz-1);
       for (let x = 0; x < outW; x++) {
-        const xIdx = Math.round((x / Math.max(outW-1,1)) * (nx-1));
+        const xIdx = Math.min(Math.round((x / Math.max(outW-1,1)) * (nx-1)), nx-1);
         const v0 = px[zi0 * nx * ny + yIdx * nx + xIdx] > 0 ? 1 : 0;
         const v1 = px[zi1 * nx * ny + yIdx * nx + xIdx] > 0 ? 1 : 0;
         if (v0*(1-tz)+v1*tz > 0.5) { const i=(zy*outW+x)*4; sd[i]=255;sd[i+1]=40;sd[i+2]=40;sd[i+3]=255; }
@@ -277,8 +294,8 @@ function renderSagittal(canvas, slices, sagittalX, wc, ww, segData, showSeg, sli
   ctx.restore();
 
   if (showSeg && segData) {
-    const { nx, ny, nz, px } = segData;
-    const xIdx = Math.round((sagittalX / Math.max(cols-1,1)) * (nx-1));
+    const { nx, ny, nz, px, zFlip } = segData;
+    const xIdx = Math.min(Math.round((sagittalX / Math.max(cols-1,1)) * (nx-1)), nx-1);
     const maskOff = new OffscreenCanvas(outW, outH);
     const mc = maskOff.getContext("2d");
     const si = mc.createImageData(outW, outH);
@@ -287,10 +304,12 @@ function renderSagittal(canvas, slices, sagittalX, wc, ww, segData, showSeg, sli
       const zFrac = (zy / outH) * n;
       const z0 = Math.min(Math.floor(zFrac), n-1), z1 = Math.min(z0+1, n-1);
       const tz = zFrac - z0;
-      const zi0 = Math.round((z0 / Math.max(n-1,1)) * (nz-1));
-      const zi1 = Math.round((z1 / Math.max(n-1,1)) * (nz-1));
+      const t0 = zFlip ? (1 - z0/Math.max(n-1,1)) : (z0/Math.max(n-1,1));
+      const t1 = zFlip ? (1 - z1/Math.max(n-1,1)) : (z1/Math.max(n-1,1));
+      const zi0 = Math.min(Math.round(t0 * (nz-1)), nz-1);
+      const zi1 = Math.min(Math.round(t1 * (nz-1)), nz-1);
       for (let y = 0; y < outW; y++) {
-        const yIdx = Math.round((y / Math.max(outW-1,1)) * (ny-1));
+        const yIdx = Math.min(Math.round((y / Math.max(outW-1,1)) * (ny-1)), ny-1);
         const v0 = px[zi0 * nx * ny + yIdx * nx + xIdx] > 0 ? 1 : 0;
         const v1 = px[zi1 * nx * ny + yIdx * nx + xIdx] > 0 ? 1 : 0;
         if (v0*(1-tz)+v1*tz > 0.5) { const i=(zy*outW+y)*4; sd[i]=255;sd[i+1]=40;sd[i+2]=40;sd[i+3]=255; }
@@ -386,10 +405,12 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
   // Calcular qué slices tienen segmentación
   const segmentedSlices = useMemo(() => {
     if (!segData || !slices.length) return new Set();
-    const { nx, ny, nz, px } = segData;
+    const { nx, ny, nz, px, zFlip } = segData;
     const result = new Set();
     for (let z = 0; z < slices.length; z++) {
-      const zIdx = Math.round((z / Math.max(slices.length-1,1)) * (nz-1));
+      const t = z / Math.max(slices.length - 1, 1);
+      const tN = zFlip ? (1 - t) : t;
+      const zIdx = Math.min(Math.round(tN * (nz - 1)), nz - 1);
       const start = zIdx * nx * ny;
       for (let i = start; i < start + nx * ny; i++) {
         if (px[i] > 0) { result.add(z); break; }
@@ -400,10 +421,19 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
 
   const getSegSlice = useCallback(() => {
     if (!segData || !slices.length) return null;
-    const { nx, ny, nz, px } = segData;
-    const zIdx = Math.round((sliceIdx / Math.max(slices.length-1,1)) * (nz-1));
-    return px.slice(zIdx * nx * ny, (zIdx+1) * nx * ny);
-  }, [segData, sliceIdx, slices.length]);
+    const { nx, ny, nz, px, zFlip } = segData;
+
+    // El backend ya resampleó la máscara al espacio del DICOM original:
+    // nx == cols, ny == rows → mapeo 1:1, sin necesidad de escalar x/y.
+    // Solo aplicamos zFlip para la correspondencia de cortes.
+    const t = sliceIdx / Math.max(slices.length - 1, 1);
+    const tN = zFlip ? (1 - t) : t;
+    const zIdx = Math.min(Math.round(tN * (nz - 1)), nz - 1);
+
+    // Devolver el plano z directamente (ya tiene las dimensiones correctas)
+    return px.slice(zIdx * nx * ny, (zIdx + 1) * nx * ny);
+  }, [segData, sliceIdx, slices]);
+
 
   // Render axial + crosshairs
   useEffect(() => {
