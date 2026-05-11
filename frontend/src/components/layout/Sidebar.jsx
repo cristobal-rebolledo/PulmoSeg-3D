@@ -1,6 +1,5 @@
 import { cn } from "@/lib/utils";
 import {
-  LayoutDashboard,
   PlusCircle,
   ClipboardList,
   Settings,
@@ -32,7 +31,6 @@ const NAV_GROUPS = [
   {
     label: "ANÁLISIS",
     items: [
-      { key: "dashboard",        label: "Dashboard",          icon: LayoutDashboard },
       { key: "new-segmentation", label: "Nueva Segmentación", icon: PlusCircle },
     ],
   },
