@@ -53,8 +53,8 @@ export default function ResultsDashboard({ clinicalResults, artifacts, stateHist
   }
 
   consoleLines.push({ type: "info",    text: "[pulmoseg.pipeline] Convirtiendo DICOM → NIfTI (SimpleITK)..." });
-  consoleLines.push({ type: "info",    text: "[pulmoseg.pipeline] Aplicando preprocesamiento nnU-Net..." });
-  consoleLines.push({ type: "info",    text: "[pulmoseg.pipeline] Ejecutando inferencia 3D U-Net (CPU)..." });
+  consoleLines.push({ type: "info",    text: "[pulmoseg.pipeline] Aplicando preprocesamiento MONAI (Spacingd, ScaleIntensity)..." });
+  consoleLines.push({ type: "info",    text: "[pulmoseg.pipeline] Ejecutando inferencia MONAI U-Net 3D (SlidingWindowInferer)..." });
   consoleLines.push({ type: "success", text: "[pulmoseg.pipeline] Inferencia completada — generando archivos de salida..." });
 
   if (artifacts) {
@@ -92,12 +92,6 @@ export default function ResultsDashboard({ clinicalResults, artifacts, stateHist
           <h3 className="text-xl font-bold" style={{ color: "var(--text-primary)" }}>
             Segmentación Completada
           </h3>
-          <p className="text-sm mt-1" style={{ color: "var(--text-secondary)" }}>
-            Lesión identificada:{" "}
-            <span className="font-semibold" style={{ color: "var(--text-accent)" }}>
-              {clinicalResults.lesion_id}
-            </span>
-          </p>
         </div>
       </div>
 

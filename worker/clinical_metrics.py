@@ -254,8 +254,16 @@ def _diameters_regionprops(
 
     region = props[0]  # Solo hay un componente (el aislado)
 
-    major_mm = float(region.axis_major_length)
-    minor_mm = float(region.axis_minor_length)
+    # Compatibilidad con skimage antiguo (<0.19: major_axis_length)
+    # y nuevo (>=0.19: axis_major_length). Se intenta el nombre nuevo primero.
+    major_mm = float(
+        getattr(region, "axis_major_length", None)
+        or getattr(region, "major_axis_length", 0.0)
+    )
+    minor_mm = float(
+        getattr(region, "axis_minor_length", None)
+        or getattr(region, "minor_axis_length", 0.0)
+    )
 
     return {"major_mm": major_mm, "minor_mm": minor_mm}
 

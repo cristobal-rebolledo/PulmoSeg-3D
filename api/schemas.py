@@ -222,3 +222,47 @@ class SegmentationResultResponse(BaseModel):
     error_message: Optional[str] = Field(
         None, description="Mensaje de error si el Job falló"
     )
+
+
+# ===========================================================================
+# Modelos del RESPONSE — GET /jobs (Listado del Historial)
+# ===========================================================================
+class JobListEntry(BaseModel):
+    """
+    Entrada resumida de un Job para el listado del historial de estudios.
+
+    Contiene únicamente los campos necesarios para la tabla de historial,
+    evitando serializar los payloads completos de result_data por cada fila.
+    Los campos opcionales son None para Jobs que no llegaron a COMPLETED.
+    """
+    job_id: str = Field(..., description="Identificador único del Job (UUID v4)")
+    patient_pseudo_id: Optional[str] = Field(
+        None, description="ID pseudoanonimizado del paciente"
+    )
+    status: str = Field(..., description="Estado actual del Job")
+    created_at: str = Field(..., description="Timestamp de creación ISO 8601")
+    completed_at: Optional[str] = Field(
+        None, description="Timestamp de finalización ISO 8601 (solo si COMPLETED)"
+    )
+    file_count: Optional[int] = Field(
+        None, description="Número de archivos DICOM procesados"
+    )
+    # Métricas clave extraídas de result_data (solo si COMPLETED)
+    volume_ml: Optional[float] = Field(
+        None, description="Volumen del nódulo en mL (solo si COMPLETED)"
+    )
+    longest_diameter_mm: Optional[float] = Field(
+        None, description="Diámetro mayor en mm (solo si COMPLETED)"
+    )
+
+
+class JobListResponse(BaseModel):
+    """
+    Respuesta paginada del endpoint GET /jobs.
+
+    El campo `total` refleja el total de registros que coinciden con el filtro
+    de búsqueda (antes de aplicar skip/limit), permitiendo al frontend
+    implementar paginación si se requiere en el futuro.
+    """
+    total: int = Field(..., description="Total de registros que coinciden con el filtro")
+    jobs: list[JobListEntry] = Field(..., description="Lista de Jobs de la página actual")

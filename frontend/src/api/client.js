@@ -190,3 +190,37 @@ export async function getJobStatus(jobId) {
 export async function cancelJob(jobId) {
   return request(`/cancel/${encodeURIComponent(jobId)}`, { method: "POST" });
 }
+
+/**
+ * GET /jobs — Lista paginada del historial de trabajos de segmentación.
+ *
+ * Soporta búsqueda por patient_pseudo_id y paginación con skip/limit.
+ * El frontend limita la vista inicial a los últimos 100 registros.
+ *
+ * @param {object} [params]
+ * @param {number} [params.skip=0]      - Offset de paginación
+ * @param {number} [params.limit=100]   - Máximo de resultados por llamada
+ * @param {string} [params.search=""]   - Filtro parcial por patient_pseudo_id
+ *
+ * @returns {Promise<{
+ *   total: number,
+ *   jobs: Array<{
+ *     job_id: string,
+ *     patient_pseudo_id: string|null,
+ *     status: string,
+ *     created_at: string,
+ *     completed_at: string|null,
+ *     file_count: number|null,
+ *     volume_ml: number|null,
+ *     longest_diameter_mm: number|null,
+ *   }>
+ * }>}
+ */
+export async function listJobs({ skip = 0, limit = 100, search = "" } = {}) {
+  const params = new URLSearchParams({ skip: String(skip), limit: String(limit) });
+  if (search && search.trim()) {
+    params.set("search", search.trim());
+  }
+  return request(`/jobs?${params.toString()}`);
+}
+

@@ -15,11 +15,6 @@ export default function ViewerPanel({ artifacts, lesionId }) {
           <Layers className="w-5 h-5" style={{ color: "var(--text-accent)" }} />
           <h3 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>Visualización Multiplanar</h3>
         </div>
-        {lesionId && (
-          <span className="text-xs font-mono px-2 py-1 rounded-md" style={{ backgroundColor: "var(--bg-input)", color: "var(--text-muted)" }}>
-            Lesión: {lesionId}
-          </span>
-        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
