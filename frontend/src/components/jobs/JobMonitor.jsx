@@ -6,11 +6,12 @@ import { ListChecks } from "lucide-react";
  * JobMonitor — Displays a list of active/completed segmentation jobs.
  *
  * @param {object} props
- * @param {Array}    props.jobs        - Array of job objects { id, patientId, status, progress, data }
+ * @param {Array}    props.jobs        - Array of job objects { id, patientId, status, progress }
  * @param {string}   props.activeJobId - Currently selected job ID
  * @param {function} props.onSelectJob - Callback when a job card is clicked
+ * @param {function} props.onCancel    - Callback to cancel an active job
  */
-export default function JobMonitor({ jobs = [], activeJobId, onSelectJob }) {
+export default function JobMonitor({ jobs = [], activeJobId, onSelectJob, onCancel }) {
   if (jobs.length === 0) {
     return (
       <div className="glass-card p-6 animate-[fade-in_0.4s_ease-out]">
@@ -65,6 +66,7 @@ export default function JobMonitor({ jobs = [], activeJobId, onSelectJob }) {
             job={job}
             isActive={job.id === activeJobId}
             onClick={() => onSelectJob?.(job.id)}
+            onCancel={onCancel}
           />
         ))}
       </div>

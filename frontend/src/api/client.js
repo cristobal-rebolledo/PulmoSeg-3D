@@ -176,3 +176,17 @@ export async function createSegmentationJob({ files, patientId, studyUid }) {
 export async function getJobStatus(jobId) {
   return request(`/status/${encodeURIComponent(jobId)}`);
 }
+
+/**
+ * POST /cancel/{job_id} — Cancels an active segmentation job.
+ *
+ * Can only cancel jobs in QUEUED or PROCESSING state.
+ * The backend marks the job as CANCELLED; the worker detects this
+ * at its next checkpoint and aborts the pipeline.
+ *
+ * @param {string} jobId - The job identifier to cancel
+ * @returns {Promise<{job_id: string, status: string, message: string}>}
+ */
+export async function cancelJob(jobId) {
+  return request(`/cancel/${encodeURIComponent(jobId)}`, { method: "POST" });
+}

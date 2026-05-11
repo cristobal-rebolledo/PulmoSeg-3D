@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
-import { FolderOpen, FileText, X, Send, Zap, Brain, Shield } from "lucide-react";
+import { FolderOpen, FileText, X, Send } from "lucide-react";
 
 export default function DicomUploader({ onSubmit, isSubmitting = false }) {
   const [isDragging, setIsDragging] = useState(false);
@@ -88,11 +88,7 @@ export default function DicomUploader({ onSubmit, isSubmitting = false }) {
     });
   }, [selectedFolder, dcmFiles, patientId, studyUid, seriesUid, onSubmit]);
 
-  const FEATURES = [
-    { icon: Zap,    label: "Fast Processing", desc: "~60s por scan" },
-    { icon: Brain,  label: "AI-Powered",      desc: "Deep Learning" },
-    { icon: Shield, label: "Seguro",          desc: "Local processing" },
-  ];
+
 
   return (
     <div className="glass-card p-8 animate-[fade-in_0.4s_ease-out]">
@@ -219,21 +215,7 @@ export default function DicomUploader({ onSubmit, isSubmitting = false }) {
         </div>
       )}
 
-      <div className="flex flex-wrap items-center justify-center gap-3 mt-6">
-        {FEATURES.map((feat) => {
-          const Icon = feat.icon;
-          return (
-            <div key={feat.label} className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl border text-xs"
-              style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-input)", color: "var(--text-secondary)" }}>
-              <Icon className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--text-accent)" }} />
-              <div>
-                <p className="font-semibold" style={{ color: "var(--text-primary)" }}>{feat.label}</p>
-                <p style={{ color: "var(--text-muted)" }}>{feat.desc}</p>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+
     </div>
   );
 }
