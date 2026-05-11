@@ -9,7 +9,7 @@ Flujo del worker:
   1. Resuelve la ruta dinámica al directorio DICOM desde el request payload.
   2. Actualiza estado a PROCESSING.
   3. Llama al pipeline MONAI con los archivos DICOM físicos.
-  4. Inyecta dicom_image_ids en artifacts para Cornerstone3D.
+  4. Inyecta dicom_image_ids en artifacts para el visor MPR (DicomCanvasViewer).
   5. Actualiza estado a COMPLETED con los resultados.
   6. Si falla, actualiza estado a FAILED con el mensaje de error.
 
@@ -17,7 +17,7 @@ Jerárquica DICOM esperada (LIDC-IDRI):
   local_storage/inputs/dicom/{patient_pseudo_id}/{study_instance_uid}/*.dcm
 
 Nota: Los directorios temp_{job_id}/ NO se eliminan al finalizar.
-  Se conservan para re-análisis clínico y visualización posterior con Cornerstone3D.
+  Se conservan para re-análisis clínico y visualización posterior con el visor MPR Canvas.
 """
 
 import logging
@@ -235,8 +235,9 @@ def run_segmentation_job(
         )
 
         # --- 5. Actualizar estado a COMPLETED ---
-        # Inyectar dicom_image_ids en artifacts para que Cornerstone3D
-        # pueda construir el volumen 3D sin re-subir los archivos.
+        # Inyectar dicom_image_ids en artifacts para que DicomCanvasViewer
+        # (visor MPR en HTML Canvas) pueda cargar los slices DICOM directamente
+        # desde el backend sin re-subir los archivos.
         if isinstance(result, dict) and dicom_dir:
             dicom_path = Path(dicom_dir)
             dcm_files = sorted(dicom_path.glob("*.dcm"))
@@ -309,4 +310,4 @@ def run_segmentation_job(
         db.close()
         logger.info(f"[{job_id}] Worker finalizado — sesión de DB cerrada")
         # NOTA: Los archivos DICOM en temp_{job_id}/ se conservan intencionalmente.
-        # Permiten re-análisis clínico y visualización posterior con Cornerstone3D.
+        # Permiten re-análisis clínico y visualización posterior con DicomCanvasViewer (MPR Canvas).

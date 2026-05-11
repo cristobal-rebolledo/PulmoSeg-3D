@@ -45,6 +45,8 @@ from api.schemas import (
     Artifacts,
     ClinicalResults,
     JobInfo,
+    JobListEntry,
+    JobListResponse,
     JobTimestamps,
     RecistMetrics,
     SegmentationJobResponse,
@@ -655,6 +657,99 @@ async def serve_volume(
         media_type="application/gzip",
         filename=volume_path.name,
     )
+
+
+# ===========================================================================
+# Endpoint: GET /jobs — Listado paginado del historial de estudios
+# ===========================================================================
+@app.get(
+    "/jobs",
+    response_model=JobListResponse,
+    summary="Listar historial de Jobs",
+    description=(
+        "Retorna la lista paginada de todos los Jobs de segmentación almacenados "
+        "en SQLite, ordenados por fecha de creación descendente (más reciente primero). "
+        "Soporta búsqueda por patient_pseudo_id y paginación con skip/limit."
+    ),
+)
+def list_jobs(
+    skip: int = 0,
+    limit: int = 100,
+    search: str = "",
+    db: Session = Depends(get_db),
+):
+    """
+    Endpoint del historial de estudios.
+
+    Parámetros de consulta:
+      - skip:   Offset para paginación (default 0).
+      - limit:  Número máximo de resultados (default 100, max recomendado 200).
+      - search: Filtro parcial por patient_pseudo_id (case-insensitive LIKE).
+
+    Extrae las métricas clave (volume_ml, longest_diameter_mm) directamente
+    desde el campo result_data (JSON serializado) de cada Job COMPLETED,
+    sin exponer el payload completo al frontend.
+    """
+    import json as _json
+
+    # ── Base query ordenada por fecha descendente ─────────────────────────
+    query = db.query(SegmentationJob).order_by(SegmentationJob.created_at.desc())
+
+    # ── Filtro de búsqueda por patient_pseudo_id ──────────────────────────
+    # Se filtra sobre request_data (TEXT JSON) usando LIKE, suficientemente
+    # eficiente para volúmenes < 10,000 registros sin índice extra.
+    if search and search.strip():
+        search_term = f"%{search.strip()}%"
+        query = query.filter(
+            SegmentationJob.request_data.like(search_term)
+        )
+
+    # ── Conteo total (antes de paginar) para el campo `total` ─────────────
+    total = query.count()
+
+    # ── Paginación ────────────────────────────────────────────────────────
+    db_jobs = query.offset(skip).limit(limit).all()
+
+    # ── Construir lista de JobListEntry ───────────────────────────────────
+    entries = []
+    for job in db_jobs:
+        # Extraer patient_pseudo_id y file_count desde request_data
+        patient_pseudo_id = None
+        file_count = None
+        try:
+            rd = _json.loads(job.request_data) if job.request_data else {}
+            patient_pseudo_id = rd.get("patient_pseudo_id")
+            dicom_src = rd.get("dicom_source", {})
+            file_count = dicom_src.get("expected_file_count")
+        except (ValueError, TypeError):
+            pass
+
+        # Extraer métricas desde result_data (solo si COMPLETED)
+        volume_ml = None
+        longest_diameter_mm = None
+        completed_at = None
+        if job.status == "COMPLETED":
+            try:
+                res = _json.loads(job.result_data) if job.result_data else {}
+                cr = res.get("clinical_results", {})
+                volume_ml = cr.get("volumetric_data", {}).get("volume_ml")
+                longest_diameter_mm = cr.get("recist_metrics", {}).get("longest_diameter_mm")
+            except (ValueError, TypeError):
+                pass
+            completed_at = job.updated_at.isoformat() if job.updated_at else None
+
+        entries.append(JobListEntry(
+            job_id=job.job_id,
+            patient_pseudo_id=patient_pseudo_id,
+            status=job.status,
+            created_at=job.created_at.isoformat() if job.created_at else "",
+            completed_at=completed_at,
+            file_count=file_count,
+            volume_ml=volume_ml,
+            longest_diameter_mm=longest_diameter_mm,
+        ))
+
+    return JobListResponse(total=total, jobs=entries)
 
 
 # ===========================================================================

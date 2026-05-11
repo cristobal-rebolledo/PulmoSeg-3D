@@ -6,7 +6,7 @@ import JobMonitor from "@/components/jobs/JobMonitor";
 import ResultsDashboard from "@/components/results/ResultsDashboard";
 import HistoryView from "@/components/views/HistoryView";
 import SettingsView from "@/components/views/SettingsView";
-import { createSegmentationJob, cancelJob } from "@/api/client";
+import { createSegmentationJob, cancelJob, getJobStatus } from "@/api/client";
 import { useJobPoller } from "@/hooks/useJobPoller";
 
 /**
@@ -164,6 +164,31 @@ export default function App() {
     }
   }, []);
 
+  // --- Cargar resultados históricos desde el Historial de Estudios ---
+  // Llamado cuando el usuario pulsa "Ver Detalle" en HistoryView.
+  // 1. Recupera el resultado completo del job desde el backend.
+  // 2. Lo persiste en completedResults para que ResultsDashboard lo muestre.
+  // 3. Navega a la vista principal.
+  const handleViewFromHistory = useCallback(async (jobId) => {
+    try {
+      const data = await getJobStatus(jobId);
+      if (data?.clinical_results) {
+        setCompletedResults((prev) => ({
+          ...prev,
+          [jobId]: {
+            clinicalResults: data.clinical_results,
+            artifacts:       data.artifacts,
+            stateHistory:    data.state_history ?? [],
+          },
+        }));
+        setActiveJobId(jobId);
+        setActiveView("new-segmentation");
+      }
+    } catch (error) {
+      console.error("Error cargando resultados históricos:", error);
+    }
+  }, []);
+
   // --- Get the selected job's results ---
   // Use persisted completedResults so they remain visible after polling stops.
   const selectedJobResults = activeJobId ? (completedResults[activeJobId] ?? null) : null;
@@ -253,7 +278,7 @@ export default function App() {
 
 
           {activeView === "history" && (
-            <HistoryView />
+            <HistoryView onViewJob={handleViewFromHistory} />
           )}
 
           {activeView === "settings" && (

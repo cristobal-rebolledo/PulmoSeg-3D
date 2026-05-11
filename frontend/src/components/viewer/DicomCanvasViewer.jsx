@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import dicomParser from "dicom-parser";
-import { Layers3, AlertTriangle, Loader, Eye, EyeOff, ChevronUp, ChevronDown, ZoomIn, ZoomOut, Maximize2, SkipForward, SkipBack } from "lucide-react";
+import { Layers3, AlertTriangle, Loader, Eye, EyeOff, ChevronUp, ChevronDown, ZoomIn, ZoomOut, SkipForward, SkipBack } from "lucide-react";
 import { API_KEY } from "@/api/client";
 
 const WINDOWS = [
@@ -480,7 +480,6 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
   }, [status, sliceIdx, slices, wc, ww, zoom, pan, showSeg, segLoaded, segData, coronalY, sagittalX, getSegSlice]);
 
   function applyPreset(i) { setWinIdx(i); setWc(WINDOWS[i].wc); setWw(WINDOWS[i].ww); }
-  function resetView() { setZoom(1); setPan({ x:0, y:0 }); }
   function jumpToSeg(dir) {
     const arr = [...segmentedSlices].sort((a,b)=>a-b);
     if (!arr.length) return;
@@ -587,7 +586,6 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
           <div className="w-px h-4" style={{ backgroundColor:"var(--border-subtle)" }}/>
           <button onClick={()=>setZoom(z=>Math.min(8,z+0.25))} className="p-1 rounded hover:bg-white/10" style={{ color:"var(--text-muted)" }}><ZoomIn className="w-4 h-4"/></button>
           <button onClick={()=>setZoom(z=>Math.max(0.25,z-0.25))} className="p-1 rounded hover:bg-white/10" style={{ color:"var(--text-muted)" }}><ZoomOut className="w-4 h-4"/></button>
-          <button onClick={resetView} className="p-1 rounded hover:bg-white/10" style={{ color:"var(--text-muted)" }}><Maximize2 className="w-4 h-4"/></button>
         </div>
       </div>
 
