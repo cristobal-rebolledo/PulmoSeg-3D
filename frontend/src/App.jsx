@@ -4,7 +4,6 @@ import Header from "@/components/layout/Header";
 import DicomUploader from "@/components/upload/DicomUploader";
 import JobMonitor from "@/components/jobs/JobMonitor";
 import ResultsDashboard from "@/components/results/ResultsDashboard";
-import DashboardView from "@/components/views/DashboardView";
 import HistoryView from "@/components/views/HistoryView";
 import SettingsView from "@/components/views/SettingsView";
 import { createSegmentationJob } from "@/api/client";
@@ -157,7 +156,6 @@ export default function App() {
 
   // --- View Titles ---
   const VIEW_TITLES = {
-    dashboard: { title: "Dashboard", subtitle: "Resumen general del sistema" },
     "new-segmentation": {
       title: "Nueva Segmentación",
       subtitle: "Sube un estudio DICOM para iniciar el análisis con IA",
@@ -237,14 +235,7 @@ export default function App() {
             </div>
           )}
 
-          {activeView === "dashboard" && (
-            <DashboardView
-              totalJobs={jobs.length}
-              completedJobs={jobs.filter(j => j.status === "COMPLETED").length}
-              failedJobs={jobs.filter(j => j.status === "FAILED").length}
-              onNavigate={setActiveView}
-            />
-          )}
+
 
           {activeView === "history" && (
             <HistoryView />
