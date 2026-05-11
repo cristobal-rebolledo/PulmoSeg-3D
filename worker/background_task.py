@@ -137,6 +137,18 @@ def _update_progress(
     db.commit()
     logger.info(f"[{job.job_id}] Progreso: {progress}% — {message}")
 
+def _check_cancelled(db, job_id: str) -> None:
+    """
+    Consulta la DB y lanza CancelledError si el job fue marcado CANCELLED.
+    Se llama en los checkpoints del pipeline para abortar rápidamente.
+    """
+    job = db.query(SegmentationJob).filter(
+        SegmentationJob.job_id == job_id
+    ).first()
+    if job and job.status == "CANCELLED":
+        raise RuntimeError("__CANCELLED__")
+
+
 
 def run_segmentation_job(
     job_id: str,
@@ -197,6 +209,7 @@ def run_segmentation_job(
         logger.info(f"[{job_id}] Estado actualizado: PROCESSING (5%)")
 
         # --- 3. Resolver ruta DICOM ---
+        _check_cancelled(db, job_id)  # Checkpoint 1: antes de resolver DICOM
         _update_progress(db, job, 10, "Resolviendo ruta DICOM...")
 
         if dicom_dir:
@@ -211,6 +224,7 @@ def run_segmentation_job(
             resolved_dicom_dir = _resolve_dicom_directory(request_data)
 
         # --- 4. Ejecutar pipeline MONAI con archivos DICOM reales ---
+        _check_cancelled(db, job_id)  # Checkpoint 2: antes de iniciar inferencia
         _update_progress(db, job, 15, "Iniciando pipeline MONAI...")
 
         result = run_inference_pipeline(
@@ -246,30 +260,49 @@ def run_segmentation_job(
 
         logger.info(f"[{job_id}] ✅ Job completado exitosamente (100%)")
 
-    except Exception as e:
-        # --- 6. Manejar errores: actualizar estado a FAILED ---
-        logger.error(f"[{job_id}] ❌ Error en el pipeline: {e}", exc_info=True)
+    except RuntimeError as e:
+        if str(e) == "__CANCELLED__":
+            # El usuario canceló el job — ya está marcado CANCELLED en la DB
+            logger.info(f"[{job_id}] ⏹️ Job cancelado por el usuario. Pipeline abortado.")
+        else:
+            # RuntimeError genérico del pipeline → FAILED
+            logger.error(f"[{job_id}] ❌ Error en el pipeline: {e}", exc_info=True)
+            try:
+                job = db.query(SegmentationJob).filter(
+                    SegmentationJob.job_id == job_id
+                ).first()
+                if job:
+                    job.status = "FAILED"
+                    job.add_state_entry("FAILED")
+                    job.error_message = str(e)
+                    job.updated_at = datetime.now(timezone.utc)
+                    db.commit()
+            except Exception as db_error:
+                logger.error(
+                    f"[{job_id}] Error crítico al actualizar DB tras fallo: {db_error}",
+                    exc_info=True,
+                )
 
+    except Exception as e:
+        # Cualquier otro error inesperado → FAILED
+        logger.error(f"[{job_id}] ❌ Error inesperado en el pipeline: {e}", exc_info=True)
         try:
-            # Re-fetch para evitar problemas de sesión después de un error
             job = db.query(SegmentationJob).filter(
                 SegmentationJob.job_id == job_id
             ).first()
-
             if job:
                 job.status = "FAILED"
-                job.progress_percentage = job.progress_percentage  # Mantener último
                 job.add_state_entry("FAILED")
                 job.error_message = str(e)
                 job.updated_at = datetime.now(timezone.utc)
                 db.commit()
-
                 logger.info(f"[{job_id}] Estado actualizado: FAILED")
         except Exception as db_error:
             logger.error(
                 f"[{job_id}] Error crítico al actualizar DB tras fallo: {db_error}",
                 exc_info=True,
             )
+
 
     finally:
         # Siempre cerrar la sesión de DB

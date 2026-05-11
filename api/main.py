@@ -4,6 +4,7 @@ main.py — Entrypoint FastAPI para PulmoSeg 3D (Entorno de Desarrollo Local).
 Endpoints implementados:
   POST /segment              → Crea un Job de segmentación (HTTP 202 Accepted)
   GET  /status/{id}          → Consulta el estado actual de un Job
+  POST /cancel/{id}          → Cancela un Job en QUEUED o PROCESSING
   GET  /dicom/{job_id}/{fn}  → Sirve un slice DICOM (protegido por API Key)
   GET  /nifti/{job_id}       → Sirve la máscara NIfTI de segmentación (protegido por API Key)
   GET  /volume/{job_id}      → Sirve el volumen CT isotrópico 1×1×1 mm (protegido por API Key)
@@ -316,9 +317,67 @@ async def create_segmentation_job(
         message=f"Segmentation job queued: {saved_count} DICOM files received",
     )
 
-
 # ===========================================================================
-# Endpoint: GET /status/{job_id}
+# Endpoint: POST /cancel/{job_id}
+# ===========================================================================
+@app.post(
+    "/cancel/{job_id}",
+    summary="Cancelar un Job de Segmentación",
+    description=(
+        "Marca el Job como CANCELLED en la base de datos si se encuentra "
+        "en estado QUEUED o PROCESSING. El worker detectará el cambio en su "
+        "próximo checkpoint y abortará la ejecución."
+    ),
+)
+def cancel_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Cancela un Job activo (QUEUED o PROCESSING).
+
+    - Si el Job está QUEUED, se cancela inmediatamente antes de iniciar.
+    - Si el Job está PROCESSING, se marca CANCELLED; el worker lo detecta
+      en el próximo checkpoint del pipeline y lanza CancelledError.
+    - Si el Job ya está COMPLETED, FAILED o CANCELLED, retorna HTTP 409.
+    """
+    job = db.query(SegmentationJob).filter(
+        SegmentationJob.job_id == job_id
+    ).first()
+
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job no encontrado: {job_id}",
+        )
+
+    if job.status not in ("QUEUED", "PROCESSING"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"No se puede cancelar el Job '{job_id}': "
+                f"estado actual es '{job.status}' (solo se pueden cancelar "
+                "jobs en QUEUED o PROCESSING)."
+            ),
+        )
+
+    job.status = "CANCELLED"
+    job.add_state_entry("CANCELLED")
+    job.error_message = "Cancelado por el usuario."
+    job.updated_at = __import__("datetime").datetime.now(
+        __import__("datetime").timezone.utc
+    )
+    db.commit()
+
+    logger.info(f"[{job_id}] Job cancelado por el usuario.")
+
+    return {
+        "job_id": job_id,
+        "status": "CANCELLED",
+        "message": "Job cancelado exitosamente.",
+    }
+
+
 # ===========================================================================
 @app.get(
     "/status/{job_id}",

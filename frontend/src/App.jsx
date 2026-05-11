@@ -6,7 +6,7 @@ import JobMonitor from "@/components/jobs/JobMonitor";
 import ResultsDashboard from "@/components/results/ResultsDashboard";
 import HistoryView from "@/components/views/HistoryView";
 import SettingsView from "@/components/views/SettingsView";
-import { createSegmentationJob } from "@/api/client";
+import { createSegmentationJob, cancelJob } from "@/api/client";
 import { useJobPoller } from "@/hooks/useJobPoller";
 
 /**
@@ -150,6 +150,20 @@ export default function App() {
     }
   }, [jobs]);
 
+  // --- Cancel a job ---
+  const handleCancel = useCallback(async (jobId) => {
+    try {
+      await cancelJob(jobId);
+      setJobs((prev) =>
+        prev.map((job) =>
+          job.id === jobId ? { ...job, status: "CANCELLED" } : job
+        )
+      );
+    } catch (error) {
+      console.error("Error al cancelar el job:", error);
+    }
+  }, []);
+
   // --- Get the selected job's results ---
   // Use persisted completedResults so they remain visible after polling stops.
   const selectedJobResults = activeJobId ? (completedResults[activeJobId] ?? null) : null;
@@ -221,6 +235,7 @@ export default function App() {
                 jobs={jobs}
                 activeJobId={activeJobId}
                 onSelectJob={handleSelectJob}
+                onCancel={handleCancel}
               />
 
               {/* Results Dashboard */}
