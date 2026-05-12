@@ -458,8 +458,20 @@ def get_job_status(
                     dicom_image_ids=art.get("dicom_image_ids"),
                 )
 
+    # --- Extraer patient_pseudo_id desde request_data (campo JSON) ---
+    patient_pseudo_id = None
+    try:
+        rd = job.get_request_data() if hasattr(job, "get_request_data") else {}
+        if not rd:
+            import json as _json
+            rd = _json.loads(job.request_data) if job.request_data else {}
+        patient_pseudo_id = rd.get("patient_pseudo_id")
+    except Exception:
+        pass
+
     return SegmentationResultResponse(
         job_info=job_info,
+        patient_pseudo_id=patient_pseudo_id,
         clinical_results=clinical_results,
         artifacts=artifacts,
         state_history=state_history,

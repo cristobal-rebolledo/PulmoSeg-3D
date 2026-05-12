@@ -216,6 +216,9 @@ class SegmentationResultResponse(BaseModel):
     Cuando está QUEUED o PROCESSING, esos campos son None.
     """
     job_info: JobInfo
+    patient_pseudo_id: Optional[str] = Field(
+        None, description="ID pseudoanonimizado del paciente (extraído de request_data)"
+    )
     clinical_results: Optional[ClinicalResults] = None
     artifacts: Optional[Artifacts] = None
     state_history: list[StateHistoryEntry] = Field(default_factory=list)
