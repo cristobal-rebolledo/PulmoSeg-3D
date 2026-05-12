@@ -1,7 +1,7 @@
 import { useState } from "react";
 import MetricsPanel from "./MetricsPanel";
 import ViewerPanel from "./ViewerPanel";
-import { Award, Terminal, ChevronDown, ChevronUp, Timer, Cpu, FlaskConical } from "lucide-react";
+import { Award, Terminal, ChevronDown, ChevronUp, Timer, Cpu, FlaskConical, User } from "lucide-react";
 import DicomCanvasViewer from "@/components/viewer/DicomCanvasViewer";
 
 /**
@@ -31,7 +31,7 @@ function fmtSec(s) {
  *      or static ViewerPanel as fallback
  *   4. Backend Console (collapsible accordion — collapsed by default)
  */
-export default function ResultsDashboard({ clinicalResults, artifacts, stateHistory, jobId }) {
+export default function ResultsDashboard({ clinicalResults, artifacts, stateHistory, jobId, patientId }) {
   const [logsOpen, setLogsOpen] = useState(false);
 
   if (!clinicalResults) return null;
@@ -92,6 +92,24 @@ export default function ResultsDashboard({ clinicalResults, artifacts, stateHist
           <h3 className="text-xl font-bold" style={{ color: "var(--text-primary)" }}>
             Segmentación Completada
           </h3>
+          {patientId && (
+            <div className="flex items-center gap-1.5 mt-1.5">
+              <User className="w-3.5 h-3.5" style={{ color: "var(--text-accent)" }} />
+              <span className="text-sm font-mono" style={{ color: "var(--text-secondary)" }}>
+                Paciente:
+              </span>
+              <span
+                className="text-sm font-mono font-semibold px-2 py-0.5 rounded"
+                style={{
+                  color: "var(--text-accent)",
+                  backgroundColor: "oklch(0.72 0.17 195 / 0.1)",
+                  border: "1px solid oklch(0.72 0.17 195 / 0.2)",
+                }}
+              >
+                {patientId}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 

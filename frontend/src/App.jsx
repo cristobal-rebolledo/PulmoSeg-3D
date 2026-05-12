@@ -93,9 +93,16 @@ export default function App() {
 
     // When job completes, persist results in state and auto-select it
     if (polledStatus === "COMPLETED") {
+      // Recover patientId from the tracked jobs list to show it in the dashboard
+      const matchedJob = jobs.find((j) => j.id === pollingJobId);
       setCompletedResults((prev) => ({
         ...prev,
-        [pollingJobId]: { clinicalResults, artifacts, stateHistory },
+        [pollingJobId]: {
+          clinicalResults,
+          artifacts,
+          stateHistory,
+          patientId: matchedJob?.patientId ?? null,
+        },
       }));
       setActiveJobId(pollingJobId);
     }
@@ -179,6 +186,8 @@ export default function App() {
             clinicalResults: data.clinical_results,
             artifacts:       data.artifacts,
             stateHistory:    data.state_history ?? [],
+            // patient_pseudo_id viene del endpoint GET /status/{id}
+            patientId:       data.patient_pseudo_id ?? null,
           },
         }));
         setActiveJobId(jobId);
@@ -267,6 +276,7 @@ export default function App() {
               {activeJobId && selectedJobResults?.clinicalResults && (
                 <ResultsDashboard
                   jobId={activeJobId}
+                  patientId={selectedJobResults.patientId ?? null}
                   clinicalResults={selectedJobResults.clinicalResults}
                   artifacts={selectedJobResults.artifacts}
                   stateHistory={selectedJobResults.stateHistory}
