@@ -22,14 +22,13 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import numpy as np
-import SimpleITK as sitk
 import torch
 
 from worker.clinical_metrics import compute_clinical_metrics
 from worker.mock_data import get_mock_artifacts
 from worker.model_config import get_active_config
 from worker.pipeline.inference import get_inferer, load_model
-from worker.pipeline.loader import convert_dicom_to_nifti, resample_to_isotropic
+from worker.pipeline.loader import convert_dicom_to_nifti
 from worker.pipeline.postprocess import (
     postprocess_prediction,
     save_predicted_mask,
@@ -56,7 +55,7 @@ def run_inference_pipeline(
       1. Configura dispositivo (CUDA si disponible, si no CPU).
       2. Carga la configuración del modelo activo (model_config.py).
       3. Convierte DICOM → NIfTI usando SimpleITK (loader.py).
-      4. Genera volume_iso.nii.gz a 1×1×1 mm para el visor MPR (loader.py).
+      4. Convierte los DICOM a NIfTI (volume.nii.gz) para la inferencia MONAI.
       5. Aplica transforms de preprocesamiento MONAI (transforms.py).
          Fallback B: carga manual SimpleITK + normalización HU si MONAI falla.
       6. Carga el modelo y ejecuta inferencia SlidingWindow (inference.py).
@@ -139,22 +138,9 @@ def run_inference_pipeline(
             if _dicom_conversion_ok:
                 _report(25, f"Volumen NIfTI generado: {nifti_path}")
 
-                # ── Resampling isotrópico para el visor MPR ───────────────────
-                # Genera volume_iso.nii.gz a 1×1×1 mm para que las vistas
-                # coronal y sagital se vean correctas sin el efecto escalones.
-                iso_path = output_dir / "volume_iso.nii.gz"
-                try:
-                    _raw_img = sitk.ReadImage(str(nifti_path))
-                    _iso_img = resample_to_isotropic(_raw_img, target_spacing=1.0)
-                    sitk.WriteImage(_iso_img, str(iso_path))
-                    logger.info(
-                        f"[{job_id}] volume_iso.nii.gz generado: "
-                        f"{_iso_img.GetSize()} @ 1×1×1 mm"
-                    )
-                except Exception as _iso_err:
-                    logger.warning(
-                        f"[{job_id}] Resampling isotrópico falló (no crítico): {_iso_err}"
-                    )
+                # El resampling isotrópico para visualización se realiza
+                # en el cliente (DicomCanvasViewer) usando el spacing leído
+                # directamente de los metadatos DICOM (PixelSpacing + SliceThickness).
             else:
                 raise RuntimeError(
                     f"convert_dicom_to_nifti retornó path vacío o inexistente: {nifti_path}"
