@@ -3,7 +3,7 @@ import DicomCanvasViewer from "@/components/viewer/DicomCanvasViewer";
 import ViewerPanel from "./ViewerPanel";
 import SuccessToast from "./SuccessToast";
 import MetricsBar from "./MetricsBar";
-import LogsAccordion from "./LogsAccordion";
+
 
 const LINE_COLOR = {
   info:    "oklch(0.72 0.17 195)",
@@ -73,7 +73,7 @@ export default function ResultsDashboard({ clinicalResults, artifacts, stateHist
         stateHistory={stateHistory}
       />
 
-      <div className="flex-1 overflow-hidden" style={{ backgroundColor: "#000" }}>
+      <div className="flex-1 overflow-hidden" style={{ backgroundColor: "#000", position: "relative" }}>
         {artifacts?.dicom_image_ids?.length > 0 && jobId ? (
           <DicomCanvasViewer
             jobId={jobId}
@@ -84,7 +84,7 @@ export default function ResultsDashboard({ clinicalResults, artifacts, stateHist
         )}
       </div>
 
-      <LogsAccordion consoleLines={consoleLines} lineColor={LINE_COLOR} />
+
     </div>
   );
 }
