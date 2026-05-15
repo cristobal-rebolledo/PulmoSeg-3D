@@ -171,6 +171,15 @@ export default function App() {
     }
   }, []);
 
+  // --- Reset to uploader (New Analysis) ---
+  // Called from the Sidebar CTA. Clears the active job so isViewerMode becomes
+  // false and the DicomUploader + JobMonitor become visible again.
+  const handleNewAnalysis = useCallback(() => {
+    setActiveJobId(null);
+    setSubmitError(null);
+    setActiveView("new-segmentation");
+  }, []);
+
   // --- Cargar resultados históricos desde el Historial de Estudios ---
   // Llamado cuando el usuario pulsa "Ver Detalle" en HistoryView.
   // 1. Recupera el resultado completo del job desde el backend.
@@ -202,31 +211,39 @@ export default function App() {
   // Use persisted completedResults so they remain visible after polling stops.
   const selectedJobResults = activeJobId ? (completedResults[activeJobId] ?? null) : null;
 
+  // Viewer mode: results are showing — no scroll, maximize the canvas area
+  const isViewerMode = !!(activeJobId && selectedJobResults?.clinicalResults);
+
   // --- View Titles ---
+  // In viewer mode the header reflects the active study, not "Nueva Segmentación".
+  const patientLabel = selectedJobResults?.patientId
+    ? `Paciente: ${selectedJobResults.patientId}`
+    : "Estudio cargado";
+
   const VIEW_TITLES = {
-    "new-segmentation": {
-      title: "Nueva Segmentación",
-      subtitle: "Sube un estudio DICOM para iniciar el análisis con IA",
-    },
-    history: { title: "Historial de Estudios", subtitle: "Registros de segmentaciones anteriores" },
+    "new-segmentation": isViewerMode
+      ? { title: "Visor CT", subtitle: patientLabel }
+      : { title: "Nueva Segmentación", subtitle: "Sube un estudio DICOM para iniciar el análisis con IA" },
+    history:  { title: "Historial de Estudios",    subtitle: "Registros de segmentaciones anteriores" },
     settings: { title: "Configuración del Modelo", subtitle: "Arquitectura nnU-Net y parámetros de inferencia" },
   };
 
   const currentView = VIEW_TITLES[activeView] || VIEW_TITLES["new-segmentation"];
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex h-screen overflow-hidden">
       {/* --- Sidebar --- */}
       <Sidebar
         activeView={activeView}
         onNavigate={setActiveView}
+        onNewAnalysis={handleNewAnalysis}
         collapsed={sidebarCollapsed}
         onCollapsedChange={setSidebarCollapsed}
       />
 
       {/* --- Main Content --- */}
       <main
-        className="flex-1 flex flex-col transition-all duration-300"
+        className="flex-1 flex flex-col overflow-hidden transition-all duration-300"
         style={{
           marginLeft: sidebarCollapsed ? "5rem" : "18rem",
         }}
@@ -240,39 +257,46 @@ export default function App() {
         />
 
         {/* Content Area */}
-        <div className="flex-1 p-8 overflow-y-auto">
+        <div
+          className={isViewerMode ? "flex flex-col flex-1 overflow-hidden" : "flex-1 p-8 overflow-y-auto"}
+        >
           {activeView === "new-segmentation" && (
-            <div className="max-w-7xl mx-auto space-y-8">
-              {/* DICOM Uploader */}
-              <DicomUploader
-                onSubmit={handleSubmit}
-                isSubmitting={isSubmitting}
-              />
+            <div className={isViewerMode ? "flex flex-col flex-1 overflow-hidden" : "max-w-7xl mx-auto space-y-8"}>
 
-              {/* Error message */}
-              {submitError && (
-                <div
-                  className="glass-card p-4 border animate-[fade-in_0.3s_ease-out]"
-                  style={{
-                    borderColor: "oklch(0.65 0.20 20 / 0.4)",
-                    backgroundColor: "oklch(0.65 0.20 20 / 0.08)",
-                  }}
-                >
-                  <p className="text-sm" style={{ color: "oklch(0.65 0.20 20)" }}>
-                    ❌ Error: {submitError}
-                  </p>
-                </div>
+              {/* DICOM Uploader — collapses to a slim bar once a job is active */}
+              {!isViewerMode && (
+                <>
+                  <DicomUploader
+                    onSubmit={handleSubmit}
+                    isSubmitting={isSubmitting}
+                  />
+
+                  {/* Error message */}
+                  {submitError && (
+                    <div
+                      className="glass-card p-4 border animate-[fade-in_0.3s_ease-out]"
+                      style={{
+                        borderColor: "oklch(0.65 0.20 20 / 0.4)",
+                        backgroundColor: "oklch(0.65 0.20 20 / 0.08)",
+                      }}
+                    >
+                      <p className="text-sm" style={{ color: "oklch(0.65 0.20 20)" }}>
+                        ❌ Error: {submitError}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Job Monitor */}
+                  <JobMonitor
+                    jobs={jobs}
+                    activeJobId={activeJobId}
+                    onSelectJob={handleSelectJob}
+                    onCancel={handleCancel}
+                  />
+                </>
               )}
 
-              {/* Job Monitor */}
-              <JobMonitor
-                jobs={jobs}
-                activeJobId={activeJobId}
-                onSelectJob={handleSelectJob}
-                onCancel={handleCancel}
-              />
-
-              {/* Results Dashboard */}
+              {/* Results Dashboard — expands to fill when viewer mode */}
               {activeJobId && selectedJobResults?.clinicalResults && (
                 <ResultsDashboard
                   jobId={activeJobId}

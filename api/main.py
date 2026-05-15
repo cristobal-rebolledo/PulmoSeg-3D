@@ -381,6 +381,123 @@ def cancel_job(
 
 
 # ===========================================================================
+# Endpoint: POST /segment-nifti
+# Recibe un archivo .nii/.nii.gz directamente (sin conversión DICOM).
+# Pensado para validación del pipeline con datasets como Task09_Spleen.
+# ===========================================================================
+@app.post(
+    "/segment-nifti",
+    response_model=SegmentationJobResponse,
+    status_code=202,
+    summary="Crear Job de Segmentación desde NIfTI (Validación)",
+    description=(
+        "Recibe un archivo NIfTI (.nii o .nii.gz) directamente via multipart/form-data. "
+        "Salta el paso de conversión DICOM→NIfTI y alimenta el volumen directamente "
+        "al pipeline MONAI. Diseñado para validar el pipeline con datasets como "
+        "Task09_Spleen (Medical Segmentation Decathlon)."
+    ),
+)
+async def create_segmentation_job_from_nifti(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(
+        ..., description="Archivo NIfTI (.nii o .nii.gz) del volumen CT a segmentar"
+    ),
+    patient_pseudo_id: str = Form(
+        "validation-patient", description="ID pseudoanonimizado del paciente"
+    ),
+    study_instance_uid: str = Form(
+        "validation-study", description="UID del estudio (puede ser libre en validación)"
+    ),
+    db: Session = Depends(get_db),
+):
+    """
+    Flujo NIfTI directo (validación):
+    1. Genera un job_id UUID v4.
+    2. Guarda el .nii.gz en local_storage/inputs/temp_{job_id}/volume.nii.gz.
+    3. Crea registro en SQLite con estado QUEUED.
+    4. Lanza BackgroundTask pasando nifti_path en lugar de dicom_dir.
+    5. Retorna 202 Accepted inmediatamente.
+    """
+    job_id = str(uuid.uuid4())
+
+    # Crear directorio permanente para este job
+    temp_nifti_dir = LOCAL_STORAGE_BASE / "inputs" / f"temp_{job_id}"
+    temp_nifti_dir.mkdir(parents=True, exist_ok=True)
+
+    # Determinar nombre del archivo de destino
+    original_name = file.filename or "volume.nii.gz"
+    if not (original_name.endswith(".nii.gz") or original_name.endswith(".nii")):
+        original_name = "volume.nii.gz"
+
+    nifti_dest_path = temp_nifti_dir / original_name
+
+    try:
+        content = await file.read()
+        with open(nifti_dest_path, "wb") as out_f:
+            out_f.write(content)
+
+        size_mb = len(content) / (1024 * 1024)
+        logger.info(
+            f"[{job_id}] NIfTI recibido: {original_name} "
+            f"({size_mb:.1f} MB) → {nifti_dest_path}"
+        )
+
+    except Exception as e:
+        import shutil
+        shutil.rmtree(temp_nifti_dir, ignore_errors=True)
+        logger.error(f"[{job_id}] Error guardando NIfTI: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error guardando archivo NIfTI: {e}",
+        )
+
+    # Construir request_data
+    request_data = {
+        "patient_pseudo_id": patient_pseudo_id,
+        "study_instance_uid": study_instance_uid,
+        "dicom_source": {
+            "gcs_bucket": "local-nifti-validation",
+            "gcs_prefix": str(temp_nifti_dir),
+            "series_instance_uid": study_instance_uid,
+            "expected_file_count": 1,
+        },
+        "nifti_source": str(nifti_dest_path),
+        "validation_mode": True,
+    }
+
+    # Crear registro en SQLite
+    new_job = SegmentationJob(
+        job_id=job_id,
+        status="QUEUED",
+        progress_percentage=0,
+    )
+    new_job.set_request_data(request_data)
+    new_job.add_state_entry("QUEUED")
+    db.add(new_job)
+    db.commit()
+    db.refresh(new_job)
+
+    logger.info(f"Job NIfTI creado: {job_id} | Status: QUEUED | NIfTI: {original_name}")
+
+    # Lanzar tarea en background pasando nifti_path directamente
+    background_tasks.add_task(
+        run_segmentation_job,
+        job_id=job_id,
+        request_data=request_data,
+        dicom_dir=None,
+        nifti_path=str(nifti_dest_path),
+    )
+
+    logger.info(f"BackgroundTask NIfTI lanzada para Job: {job_id}")
+
+    return SegmentationJobResponse(
+        job_id=job_id,
+        status="QUEUED",
+        message=f"NIfTI validation job queued: {original_name} ({size_mb:.1f} MB)",
+    )
+
+
+# ===========================================================================
 @app.get(
     "/status/{job_id}",
     response_model=SegmentationResultResponse,

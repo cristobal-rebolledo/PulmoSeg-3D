@@ -154,6 +154,7 @@ def run_segmentation_job(
     job_id: str,
     request_data: dict,
     dicom_dir: str | None = None,
+    nifti_path: str | None = None,
 ) -> None:
     """
     Ejecuta un trabajo de segmentación en segundo plano.
@@ -161,9 +162,10 @@ def run_segmentation_job(
     Esta función es llamada por BackgroundTasks de FastAPI y se ejecuta
     en un thread separado del thread pool.
 
-    Flujo de resolución del directorio DICOM:
-      1. Si dicom_dir se proporciona (multipart upload), se usa directamente.
-      2. Si no, resuelve la ruta dinámicamente desde el payload del request
+    Flujo de resolución del input:
+      1. Si nifti_path se proporciona, se usa directamente (modo validación NIfTI).
+      2. Si dicom_dir se proporciona (multipart upload), se usa como entrada DICOM.
+      3. Si ninguno, resuelve la ruta dinámicamente desde el payload del request
          usando patient_pseudo_id + study_instance_uid.
 
     Args:
@@ -171,6 +173,9 @@ def run_segmentation_job(
         request_data: Diccionario con el payload completo del request original.
         dicom_dir: Ruta directa al directorio temporal con los DICOM subidos.
                    Si se proporciona, se usa en lugar de resolver desde metadatos.
+        nifti_path: Ruta directa a un archivo .nii.gz de entrada.
+                    Cuando se provee, se salta completamente la conversión DICOM.
+                    Útil para validar con datasets como Task09_Spleen.
 
     Side effects:
         - Actualiza el registro SegmentationJob en SQLite con:
@@ -208,11 +213,21 @@ def run_segmentation_job(
 
         logger.info(f"[{job_id}] Estado actualizado: PROCESSING (5%)")
 
-        # --- 3. Resolver ruta DICOM ---
-        _check_cancelled(db, job_id)  # Checkpoint 1: antes de resolver DICOM
-        _update_progress(db, job, 10, "Resolviendo ruta DICOM...")
+        # --- 3. Resolver ruta DICOM o NIfTI de entrada ---
+        _check_cancelled(db, job_id)  # Checkpoint 1: antes de resolver input
+        _update_progress(db, job, 10, "Resolviendo fuente de entrada...")
 
-        if dicom_dir:
+        resolved_dicom_dir = None
+        resolved_nifti_path = None
+
+        if nifti_path:
+            # Modo NIfTI directo (validación): la ruta viene directa del endpoint
+            resolved_nifti_path = Path(nifti_path)
+            logger.info(
+                f"[{job_id}] NIfTI directo recibido: {resolved_nifti_path} "
+                f"({resolved_nifti_path.stat().st_size / (1024*1024):.1f} MB)"
+            )
+        elif dicom_dir:
             # Multipart upload: la ruta viene directa del endpoint
             resolved_dicom_dir = Path(dicom_dir)
             logger.info(
@@ -223,7 +238,7 @@ def run_segmentation_job(
             # Fallback: resolver desde metadatos del request (compatibilidad)
             resolved_dicom_dir = _resolve_dicom_directory(request_data)
 
-        # --- 4. Ejecutar pipeline MONAI con archivos DICOM reales ---
+        # --- 4. Ejecutar pipeline MONAI ---
         _check_cancelled(db, job_id)  # Checkpoint 2: antes de iniciar inferencia
         _update_progress(db, job, 15, "Iniciando pipeline MONAI...")
 
@@ -231,6 +246,7 @@ def run_segmentation_job(
             job_id=job_id,
             request_data=request_data,
             dicom_dir=resolved_dicom_dir,
+            nifti_path=resolved_nifti_path,
             progress_callback=lambda pct, msg: _update_progress(db, job, pct, msg),
         )
 

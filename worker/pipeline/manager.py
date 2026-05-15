@@ -46,6 +46,7 @@ def run_inference_pipeline(
     job_id: str,
     request_data: dict,
     dicom_dir: Optional[Path] = None,
+    nifti_path: Optional[Path] = None,
     progress_callback: Optional[Callable] = None,
 ) -> dict:
     """
@@ -54,7 +55,8 @@ def run_inference_pipeline(
     Flujo:
       1. Configura dispositivo (CUDA si disponible, si no CPU).
       2. Carga la configuración del modelo activo (model_config.py).
-      3. Convierte DICOM → NIfTI usando SimpleITK (loader.py).
+      3. [Opcional] Convierte DICOM → NIfTI usando SimpleITK (loader.py).
+         Si se pasa nifti_path directamente, se salta este paso.
       4. Convierte los DICOM a NIfTI (volume.nii.gz) para la inferencia MONAI.
       5. Aplica transforms de preprocesamiento MONAI (transforms.py).
          Fallback B: carga manual SimpleITK + normalización HU si MONAI falla.
@@ -67,7 +69,10 @@ def run_inference_pipeline(
         job_id: Identificador único del Job.
         request_data: Diccionario con el payload del request original.
         dicom_dir: Path al directorio con archivos DICOM reales.
-                   Si None, el pipeline falla explícitamente (no hay mock).
+                   Si None y nifti_path también es None, el pipeline falla.
+        nifti_path: Path directo a un archivo .nii.gz de entrada.
+                    Cuando se provee, se salta completamente la conversión DICOM→NIfTI.
+                    Útil para validar con datasets como Task09_Spleen.
         progress_callback: Función opcional callback(percentage: int, message: str)
                            para reportar progreso al worker.
 
@@ -125,25 +130,39 @@ def run_inference_pipeline(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # =========================================================================
-    # PASO 4 — Conversión DICOM → NIfTI
+    # PASO 4 — Conversión DICOM → NIfTI (o uso directo de NIfTI)
     # =========================================================================
-    nifti_path = output_dir / "volume.nii.gz"
+    _volume_nifti_path = output_dir / "volume.nii.gz"
     _dicom_conversion_ok = False
 
-    if dicom_dir:
+    if nifti_path is not None:
+        # ── Modo NIfTI directo: saltar conversión DICOM ──────────────────────
+        # Útil para validar el pipeline con datasets como Task09_Spleen
+        # donde ya disponemos de archivos .nii.gz listos para inferencia.
+        import shutil as _shutil
+        if not nifti_path.exists():
+            raise FileNotFoundError(
+                f"Archivo NIfTI de entrada no encontrado: {nifti_path}"
+            )
+        _shutil.copy2(str(nifti_path), str(_volume_nifti_path))
+        _dicom_conversion_ok = _volume_nifti_path.exists() and _volume_nifti_path.stat().st_size > 0
+        _report(25, f"NIfTI de entrada copiado directamente: {_volume_nifti_path} (saltando conversión DICOM)")
+        logger.info(
+            f"[{job_id}] Modo NIfTI directo — origen: {nifti_path}, "
+            f"destino: {_volume_nifti_path}, "
+            f"tamaño: {_volume_nifti_path.stat().st_size:,} bytes"
+        )
+    elif dicom_dir:
+        # ── Modo DICOM: conversión normal ────────────────────────────────────
         try:
-            nifti_path = convert_dicom_to_nifti(dicom_dir, nifti_path)
-            _dicom_conversion_ok = nifti_path.exists() and nifti_path.stat().st_size > 0
+            _volume_nifti_path = convert_dicom_to_nifti(dicom_dir, _volume_nifti_path)
+            _dicom_conversion_ok = _volume_nifti_path.exists() and _volume_nifti_path.stat().st_size > 0
 
             if _dicom_conversion_ok:
-                _report(25, f"Volumen NIfTI generado: {nifti_path}")
-
-                # El resampling isotrópico para visualización se realiza
-                # en el cliente (DicomCanvasViewer) usando el spacing leído
-                # directamente de los metadatos DICOM (PixelSpacing + SliceThickness).
+                _report(25, f"Volumen NIfTI generado: {_volume_nifti_path}")
             else:
                 raise RuntimeError(
-                    f"convert_dicom_to_nifti retornó path vacío o inexistente: {nifti_path}"
+                    f"convert_dicom_to_nifti retornó path vacío o inexistente: {_volume_nifti_path}"
                 )
         except Exception as _conv_err:
             logger.error(
@@ -153,7 +172,10 @@ def run_inference_pipeline(
             _report(25, f"Conversión DICOM falló: {_conv_err}")
             raise
     else:
-        raise ValueError("Directorio DICOM no proporcionado")
+        raise ValueError("Se debe proporcionar dicom_dir o nifti_path")
+
+    # Reasignar la variable para el resto del pipeline
+    nifti_path = _volume_nifti_path
 
     # ── CHECKPOINT B: Hash y tamaño del NIfTI generado ───────────────────────
     if _dicom_conversion_ok:
@@ -170,7 +192,7 @@ def run_inference_pipeline(
         except Exception as _e:
             logger.warning(f"[{job_id}] No se pudo calcular hash del NIfTI: {_e}")
     else:
-        raise RuntimeError("Conversión DICOM→NIfTI resultó en archivo ausente/vacío.")
+        raise RuntimeError("Volumen NIfTI ausente/vacío tras la preparación de entrada.")
 
     # =========================================================================
     # PASO 5 — Preprocesamiento MONAI (Intento A + Fallback B)
@@ -188,6 +210,24 @@ def run_inference_pipeline(
                 preprocessed_data = transforms(data_dict)
 
                 img_tensor = preprocessed_data["image"]
+
+                # Extraer affine del MetaTensor MONAI para alineación correcta
+                # El affine describe la geometría en el espacio RAS+resampled.
+                # postprocess.py lo usará para posicionar correctamente la máscara.
+                _monai_affine = None
+                try:
+                    _meta = getattr(img_tensor, "meta", {})
+                    _monai_affine = _meta.get("affine", None)
+                    if _monai_affine is not None:
+                        logger.info(
+                            f"[{job_id}] Affine MONAI extraído: "
+                            f"shape={list(_monai_affine.shape)}, "
+                            f"origin_ras={[round(float(v),2) for v in _monai_affine[:3,3]]}"
+                        )
+                except Exception as _e_aff:
+                    logger.warning(f"[{job_id}] No se pudo extraer affine MONAI: {_e_aff}")
+                    _monai_affine = None
+
                 logger.info(f"[{job_id}] ── CHECKPOINT C: Tensor de entrada ──")
                 logger.info(f"[{job_id}]   Shape: {list(img_tensor.shape)}")
                 logger.info(f"[{job_id}]   dtype: {img_tensor.dtype}")
@@ -212,6 +252,7 @@ def run_inference_pipeline(
                     exc_info=True,
                 )
                 preprocessed_data = None  # activa el fallback B
+                _monai_affine = None      # sin affine en fallback
 
         # ── Intento B: carga manual SimpleITK + normalización HU ─────────────
         # Necesario cuando la estrategia-2 genera NIfTI con spacing/direction
@@ -330,12 +371,16 @@ def run_inference_pipeline(
         spacing_sitk = tuple(reversed(config.target_spacing))
         ref_nifti = nifti_path if nifti_path.exists() else None
 
+        # Determinar si tenemos el affine de MONAI (Intento A) o no (Intento B)
+        _affine = _monai_affine if "_monai_affine" in dir() else None
+
         # 7a. Guardar máscara binaria → mask.nii.gz
         save_predicted_mask(
             mask_np=mask_np,
             output_dir=output_dir,
             spacing=spacing_sitk,
             reference_nifti_path=ref_nifti,
+            monai_affine=_affine,
         )
 
         # 7b. Guardar mapa de incertidumbre → uncertainty.nii.gz
@@ -345,6 +390,7 @@ def run_inference_pipeline(
                 output_dir=output_dir,
                 spacing=spacing_sitk,
                 reference_nifti_path=ref_nifti,
+                monai_affine=_affine,
             )
         else:
             logger.warning(
