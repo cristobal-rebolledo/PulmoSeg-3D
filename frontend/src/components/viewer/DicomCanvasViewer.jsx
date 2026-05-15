@@ -554,7 +554,7 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
   const hasSegHere = segmentedSlices.has(sliceIdx);
 
   return (
-    <div className="glass-card overflow-hidden" style={{ padding: 0 }}>
+    <div className="flex flex-col overflow-hidden" style={{ height: "100%", padding: 0 }}>
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-3 border-b"
         style={{ backgroundColor: "var(--bg-input)", borderColor: "var(--border-subtle)" }}>
@@ -599,7 +599,7 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
       )}
 
       {/* ── 3-panel MPR layout: Axial | Coronal | Sagittal ───────────────── */}
-      <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr", height:"640px", backgroundColor:"#000" }}>
+      <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr", flex: 1, minHeight: 0, backgroundColor:"#000" }}>
 
         {/* ── Axial ─────────────────────────────────────────────────────── */}
         <div className="relative overflow-hidden"

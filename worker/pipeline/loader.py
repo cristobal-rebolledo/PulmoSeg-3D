@@ -1,10 +1,9 @@
 """
-worker/pipeline/loader.py — Conversión DICOM → NIfTI y remuestreo isotrópico.
+worker/pipeline/loader.py — Conversión DICOM → NIfTI.
 
 Responsabilidades:
   - Leer series DICOM con estrategia dual (GDCM + fallback slice-by-slice).
   - Generar un volumen NIfTI (.nii.gz) unificado desde los slices DICOM.
-  - Remuestrear el volumen a spacing isotrópico para visualización MPR.
 
 Dependencias externas:
   - SimpleITK: lectura DICOM y operaciones de imagen 3D.
@@ -165,47 +164,3 @@ def convert_dicom_to_nifti(
         f"Dimensiones: {image.GetSize()} | Spacing: {image.GetSpacing()}"
     )
     return output_path
-
-
-def resample_to_isotropic(
-    input_image: "sitk.Image",
-    target_spacing: float = 1.0,
-) -> "sitk.Image":
-    """
-    Re-muestrea un volumen SimpleITK a spacing isotrópico (target_spacing mm³).
-
-    Usa interpolación B-spline de orden 3 para el CT (imagen continua),
-    garantizando que las reconstrucciones MPR sean anatomicamente correctas
-    sin el efecto de "escalones" causado por la alta anisotropía Z (5-7 mm).
-
-    Args:
-        input_image: Volumen SimpleITK original (spacing anisótropo típico).
-        target_spacing: Resolución objetivo en mm para los 3 ejes (defecto 1.0).
-
-    Returns:
-        Volumen SimpleITK remuestreado a target_spacing³ mm³.
-    """
-    orig_spacing = input_image.GetSpacing()
-    orig_size    = input_image.GetSize()
-
-    new_size = [
-        int(round(orig_size[i] * orig_spacing[i] / target_spacing))
-        for i in range(3)
-    ]
-    new_spacing = [target_spacing] * 3
-
-    logger.info(
-        f"Resampling isotrópico: spacing {orig_spacing} → ({target_spacing},)*3 | "
-        f"size {orig_size} → {new_size}"
-    )
-
-    resampler = sitk.ResampleImageFilter()
-    resampler.SetOutputSpacing(new_spacing)
-    resampler.SetSize(new_size)
-    resampler.SetOutputDirection(input_image.GetDirection())
-    resampler.SetOutputOrigin(input_image.GetOrigin())
-    resampler.SetTransform(sitk.Transform())
-    resampler.SetDefaultPixelValue(-1000.0)
-    resampler.SetInterpolator(sitk.sitkBSpline)
-
-    return resampler.Execute(input_image)

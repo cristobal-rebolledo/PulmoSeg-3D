@@ -1,10 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
-import { FileText, Search, Eye, Download, Loader, AlertTriangle, RefreshCw } from "lucide-react";
+import {
+  FileText, Search, Eye, Download, Loader, AlertTriangle,
+  RefreshCw, ChevronFirst, ChevronLast, ChevronLeft, ChevronRight,
+} from "lucide-react";
 import { listJobs } from "@/api/client";
 
 // ---------------------------------------------------------------------------
-// Constantes de estilo por estado
+// Constantes
 // ---------------------------------------------------------------------------
 const STATUS_STYLES = {
   COMPLETED:  { label: "Completado",  color: "oklch(0.72 0.19 155)", bg: "oklch(0.72 0.19 155 / 0.1)" },
@@ -14,8 +17,10 @@ const STATUS_STYLES = {
   CANCELLED:  { label: "Cancelado",   color: "oklch(0.55 0.05 260)", bg: "oklch(0.55 0.05 260 / 0.1)" },
 };
 
+const PAGE_SIZE_OPTIONS = [10, 25, 50];
+
 // ---------------------------------------------------------------------------
-// Debounce hook — evita disparar el fetch por cada tecla en el buscador
+// Debounce hook
 // ---------------------------------------------------------------------------
 function useDebounce(value, delay = 400) {
   const [debounced, setDebounced] = useState(value);
@@ -27,37 +32,142 @@ function useDebounce(value, delay = 400) {
 }
 
 // ---------------------------------------------------------------------------
+// Paginador — renderiza los botones de páginas con ventana deslizante
+// ---------------------------------------------------------------------------
+function Paginator({ page, totalPages, onPage }) {
+  if (totalPages <= 1) return null;
+
+  // Ventana: siempre muestra hasta 5 páginas alrededor de la actual
+  const delta = 2;
+  const range = [];
+  const rangeWithDots = [];
+
+  for (let i = Math.max(2, page - delta); i <= Math.min(totalPages - 1, page + delta); i++) {
+    range.push(i);
+  }
+
+  // Primera página
+  rangeWithDots.push(1);
+
+  if (range[0] > 2) rangeWithDots.push("…");
+  range.forEach((p) => rangeWithDots.push(p));
+  if (range[range.length - 1] < totalPages - 1) rangeWithDots.push("…");
+
+  if (totalPages > 1) rangeWithDots.push(totalPages);
+
+  const btnBase = [
+    "flex items-center justify-center min-w-[2rem] h-8 px-1.5 rounded text-xs font-medium",
+    "border transition-all duration-150 cursor-pointer select-none",
+  ].join(" ");
+
+  const btnActive = { backgroundColor: "#22d3ee", borderColor: "#22d3ee", color: "oklch(0.13 0.01 260)" };
+  const btnNormal = { borderColor: "var(--border-subtle)", color: "var(--text-secondary)", backgroundColor: "var(--bg-input)" };
+  const btnDisabled = { borderColor: "var(--border-subtle)", color: "var(--text-muted)", backgroundColor: "transparent", opacity: 0.4, cursor: "not-allowed" };
+
+  return (
+    <div className="flex items-center gap-1">
+      {/* << First */}
+      <button
+        className={btnBase}
+        style={page === 1 ? btnDisabled : btnNormal}
+        disabled={page === 1}
+        onClick={() => onPage(1)}
+        title="Primera página"
+      >
+        <ChevronFirst className="w-3.5 h-3.5" />
+      </button>
+
+      {/* < Prev */}
+      <button
+        className={btnBase}
+        style={page === 1 ? btnDisabled : btnNormal}
+        disabled={page === 1}
+        onClick={() => onPage(page - 1)}
+        title="Página anterior"
+      >
+        <ChevronLeft className="w-3.5 h-3.5" />
+      </button>
+
+      {/* Page numbers */}
+      {rangeWithDots.map((p, i) =>
+        p === "…" ? (
+          <span
+            key={`dots-${i}`}
+            className="flex items-center justify-center w-8 h-8 text-xs select-none"
+            style={{ color: "var(--text-muted)" }}
+          >
+            ···
+          </span>
+        ) : (
+          <button
+            key={p}
+            className={btnBase}
+            style={p === page ? btnActive : btnNormal}
+            onClick={() => onPage(p)}
+          >
+            {p}
+          </button>
+        )
+      )}
+
+      {/* > Next */}
+      <button
+        className={btnBase}
+        style={page === totalPages ? btnDisabled : btnNormal}
+        disabled={page === totalPages}
+        onClick={() => onPage(page + 1)}
+        title="Página siguiente"
+      >
+        <ChevronRight className="w-3.5 h-3.5" />
+      </button>
+
+      {/* >> Last */}
+      <button
+        className={btnBase}
+        style={page === totalPages ? btnDisabled : btnNormal}
+        disabled={page === totalPages}
+        onClick={() => onPage(totalPages)}
+        title="Última página"
+      >
+        <ChevronLast className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Componente principal
 // ---------------------------------------------------------------------------
 /**
- * HistoryView — Historial dinámico de estudios de segmentación.
+ * HistoryView — Historial paginado de estudios de segmentación.
  *
- * Obtiene los últimos 100 registros de GET /jobs al montar el componente.
- * Soporta búsqueda en tiempo real (debounce 400ms) por patient_pseudo_id.
- * El botón "Ver Detalle" delega la navegación al handler onViewJob del padre.
+ * Paginación server-side real usando skip/limit del endpoint GET /jobs.
+ * Soporta búsqueda debounced por patient_pseudo_id.
  *
- * @param {object} props
- * @param {function} props.onViewJob - Callback(jobId) llamado al pulsar "Ver Detalle"
+ * @param {object}   props
+ * @param {function} props.onViewJob - Callback(jobId) al pulsar "Ver Detalle"
  */
 export default function HistoryView({ onViewJob }) {
-  const [jobs,    setJobs]    = useState([]);
-  const [total,   setTotal]   = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState(null);
-  const [search,  setSearch]  = useState("");
+  const [jobs,     setJobs]     = useState([]);
+  const [total,    setTotal]    = useState(0);
+  const [loading,  setLoading]  = useState(true);
+  const [error,    setError]    = useState(null);
+  const [search,   setSearch]   = useState("");
+  const [page,     setPage]     = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
-  // Valor de búsqueda con debounce de 400ms
   const debouncedSearch = useDebounce(search, 400);
-
-  // Ref para el input — permite hacer foco sin re-renderizar
   const searchRef = useRef(null);
 
-  // ── Fetch de datos ──────────────────────────────────────────────────────
-  const fetchJobs = useCallback(async (searchTerm) => {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  // ── Fetch server-side ────────────────────────────────────────────────────
+  const fetchJobs = useCallback(async (searchTerm, currentPage, size) => {
     setLoading(true);
     setError(null);
     try {
-      const data = await listJobs({ limit: 100, search: searchTerm });
+      const skip = (currentPage - 1) * size;
+      const data = await listJobs({ skip, limit: size, search: searchTerm });
       setJobs(data.jobs ?? []);
       setTotal(data.total ?? 0);
     } catch (err) {
@@ -67,12 +177,23 @@ export default function HistoryView({ onViewJob }) {
     }
   }, []);
 
-  // Volver a buscar cada vez que cambia el término con debounce
+  // Re-fetch cuando cambia búsqueda (reset a pág 1) o página/pageSize
   useEffect(() => {
-    fetchJobs(debouncedSearch);
-  }, [debouncedSearch, fetchJobs]);
+    fetchJobs(debouncedSearch, page, pageSize);
+  }, [debouncedSearch, page, pageSize, fetchJobs]);
 
-  // ── Helpers de formato ──────────────────────────────────────────────────
+  // Al cambiar búsqueda volvemos a página 1
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch]);
+
+  // Al cambiar tamaño de página volvemos a página 1
+  const handlePageSize = (size) => {
+    setPageSize(size);
+    setPage(1);
+  };
+
+  // ── Helpers de formato ───────────────────────────────────────────────────
   function fmtDate(iso) {
     if (!iso) return "—";
     return new Date(iso).toLocaleDateString("es-CL", {
@@ -86,9 +207,22 @@ export default function HistoryView({ onViewJob }) {
     });
   }
 
+  // Primeros 8 chars del UUID + indicador del segmento #2 para legibilidad
+  // Ejemplo: "33fec9de" → muestra "33fec9de" con tooltip del UUID completo
+  function shortId(jobId) {
+    if (!jobId) return "—";
+    const parts = jobId.split("-");
+    // Muestra los primeros dos segmentos: "33fec9de-1a2b" para más contexto
+    return parts.slice(0, 2).join("-");
+  }
+
+  // ── Rango de filas mostradas ─────────────────────────────────────────────
+  const firstRow = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const lastRow  = Math.min(page * pageSize, total);
+
   // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <div className="max-w-7xl mx-auto space-y-6 animate-[fade-in_0.4s_ease-out]">
+    <div className="max-w-7xl mx-auto space-y-5 animate-[fade-in_0.4s_ease-out]">
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
@@ -112,10 +246,10 @@ export default function HistoryView({ onViewJob }) {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Botón Refrescar */}
+          {/* Refrescar */}
           <button
             id="history-refresh-btn"
-            onClick={() => fetchJobs(debouncedSearch)}
+            onClick={() => fetchJobs(debouncedSearch, page, pageSize)}
             disabled={loading}
             className="p-2 rounded-lg border transition-colors hover:bg-[var(--bg-card-hover)] disabled:opacity-40"
             style={{ borderColor: "var(--border-subtle)", color: "var(--text-muted)" }}
@@ -164,15 +298,50 @@ export default function HistoryView({ onViewJob }) {
             <p className="text-sm font-semibold" style={{ color: "oklch(0.65 0.20 20)" }}>
               Error al cargar el historial
             </p>
-            <p className="text-xs mt-1 font-mono" style={{ color: "var(--text-muted)" }}>
-              {error}
-            </p>
+            <p className="text-xs mt-1 font-mono" style={{ color: "var(--text-muted)" }}>{error}</p>
           </div>
         </div>
       )}
 
       {/* ── Tabla ──────────────────────────────────────────────────────── */}
       <div className="glass-card overflow-hidden" style={{ padding: 0 }}>
+
+        {/* Sub-header: selector de filas + info de página */}
+        <div
+          className="flex items-center justify-between px-5 py-2.5 border-b"
+          style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-input)" }}
+        >
+          {/* "Mostrar X entradas" */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs" style={{ color: "var(--text-muted)" }}>Mostrar</span>
+            <select
+              id="history-page-size"
+              value={pageSize}
+              onChange={(e) => handlePageSize(Number(e.target.value))}
+              className="text-xs rounded px-2 py-1 border outline-none cursor-pointer"
+              style={{
+                borderColor: "var(--border-subtle)",
+                backgroundColor: "var(--bg-card)",
+                color: "var(--text-primary)",
+              }}
+            >
+              {PAGE_SIZE_OPTIONS.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+            <span className="text-xs" style={{ color: "var(--text-muted)" }}>entradas</span>
+          </div>
+
+          {/* Info de rango */}
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+            {loading
+              ? "Cargando..."
+              : total === 0
+              ? "Sin registros"
+              : `Mostrando ${firstRow}–${lastRow} de ${total} registros`}
+          </span>
+        </div>
+
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
@@ -193,7 +362,7 @@ export default function HistoryView({ onViewJob }) {
             </thead>
             <tbody>
 
-              {/* Estado de carga */}
+              {/* Cargando */}
               {loading && (
                 <tr>
                   <td colSpan={8} className="px-5 py-12 text-center">
@@ -216,20 +385,18 @@ export default function HistoryView({ onViewJob }) {
                       <p className="text-sm" style={{ color: "var(--text-muted)" }}>
                         {search
                           ? `No se encontraron estudios para "${search}"`
-                          : "No hay estudios registrados aún. Sube tu primer estudio DICOM."}
+                          : "No hay estudios registrados aún."}
                       </p>
                     </div>
                   </td>
                 </tr>
               )}
 
-              {/* Filas de datos */}
+              {/* Filas */}
               {!loading && jobs.map((row, i) => {
                 const st = STATUS_STYLES[row.status] ?? STATUS_STYLES.FAILED;
                 const isCompleted = row.status === "COMPLETED";
-
-                // Abreviar job_id para la columna (primeros 8 chars del UUID)
-                const shortId = row.job_id.split("-")[0] ?? row.job_id;
+                const sid = shortId(row.job_id);
 
                 return (
                   <tr
@@ -237,41 +404,54 @@ export default function HistoryView({ onViewJob }) {
                     className={cn(
                       "border-b transition-colors duration-150",
                       "hover:bg-[var(--bg-card-hover)]",
-                      "animate-[fade-in_0.3s_ease-out]"
+                      "animate-[fade-in_0.25s_ease-out]"
                     )}
                     style={{
                       borderColor: "var(--border-subtle)",
-                      animationDelay: `${i * 40}ms`,
+                      animationDelay: `${i * 30}ms`,
                       animationFillMode: "both",
                     }}
                   >
-                    {/* ID */}
-                    <td className="px-5 py-4">
-                      <span
-                        className="text-xs font-mono px-2 py-1 rounded"
-                        style={{ backgroundColor: "var(--bg-input)", color: "var(--text-accent)" }}
-                        title={row.job_id}
+                    {/* ── ID Estudio ── */}
+                    <td className="px-5 py-3.5">
+                      <div
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg"
+                        style={{
+                          backgroundColor: "var(--bg-card)",
+                          border: "1px solid var(--border-subtle)",
+                        }}
+                        title={`UUID completo: ${row.job_id}`}
                       >
-                        {shortId}…
-                      </span>
+                        {/* Punto de color indicador */}
+                        <span
+                          className="w-1.5 h-1.5 rounded-full shrink-0"
+                          style={{ backgroundColor: st.color }}
+                        />
+                        <span
+                          className="text-xs font-mono font-semibold tracking-tight"
+                          style={{ color: "var(--text-primary)" }}
+                        >
+                          {sid}
+                        </span>
+                      </div>
                     </td>
 
-                    {/* Paciente */}
-                    <td className="px-5 py-4">
+                    {/* ── Paciente ── */}
+                    <td className="px-5 py-3.5">
                       <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
                         {row.patient_pseudo_id ?? <span style={{ color: "var(--text-muted)" }}>—</span>}
                       </span>
                     </td>
 
-                    {/* Archivos */}
-                    <td className="px-5 py-4">
+                    {/* ── Archivos ── */}
+                    <td className="px-5 py-3.5">
                       <span className="text-sm font-mono" style={{ color: "var(--text-secondary)" }}>
                         {row.file_count != null ? `${row.file_count} dcm` : "—"}
                       </span>
                     </td>
 
-                    {/* Fecha */}
-                    <td className="px-5 py-4">
+                    {/* ── Fecha ── */}
+                    <td className="px-5 py-3.5">
                       <span className="text-sm" style={{ color: "var(--text-secondary)" }}>
                         {fmtDate(row.created_at)}
                       </span>
@@ -281,8 +461,8 @@ export default function HistoryView({ onViewJob }) {
                       </span>
                     </td>
 
-                    {/* Estado */}
-                    <td className="px-5 py-4">
+                    {/* ── Estado ── */}
+                    <td className="px-5 py-3.5">
                       <span
                         className="inline-flex px-2.5 py-1 rounded-full text-xs font-semibold"
                         style={{ backgroundColor: st.bg, color: st.color }}
@@ -291,8 +471,8 @@ export default function HistoryView({ onViewJob }) {
                       </span>
                     </td>
 
-                    {/* Volumen */}
-                    <td className="px-5 py-4">
+                    {/* ── Volumen ── */}
+                    <td className="px-5 py-3.5">
                       {row.volume_ml != null
                         ? <span className="text-sm font-mono font-medium" style={{ color: "var(--text-primary)" }}>
                             {row.volume_ml.toFixed(2)}
@@ -300,8 +480,8 @@ export default function HistoryView({ onViewJob }) {
                         : <span className="text-sm" style={{ color: "var(--text-muted)" }}>—</span>}
                     </td>
 
-                    {/* Diámetro */}
-                    <td className="px-5 py-4">
+                    {/* ── Diámetro ── */}
+                    <td className="px-5 py-3.5">
                       {row.longest_diameter_mm != null
                         ? <span className="text-sm font-mono font-medium" style={{ color: "var(--text-primary)" }}>
                             {row.longest_diameter_mm.toFixed(1)}
@@ -309,10 +489,9 @@ export default function HistoryView({ onViewJob }) {
                         : <span className="text-sm" style={{ color: "var(--text-muted)" }}>—</span>}
                     </td>
 
-                    {/* Acciones */}
-                    <td className="px-5 py-4">
+                    {/* ── Acciones ── */}
+                    <td className="px-5 py-3.5">
                       <div className="flex items-center gap-2">
-                        {/* Ver Detalle */}
                         <button
                           id={`history-view-${row.job_id}`}
                           className={cn(
@@ -328,13 +507,12 @@ export default function HistoryView({ onViewJob }) {
                           }}
                           disabled={!isCompleted}
                           onClick={() => isCompleted && onViewJob?.(row.job_id)}
-                          title={isCompleted ? "Cargar resultados en el visor" : "Solo disponible para estudios completados"}
+                          title={isCompleted ? "Cargar en el visor" : "Solo para estudios completados"}
                         >
                           <Eye className="w-3.5 h-3.5" />
                           Ver Detalle
                         </button>
 
-                        {/* Descargar NIfTI */}
                         <a
                           id={`history-download-${row.job_id}`}
                           href={isCompleted ? `/api/nifti/${row.job_id}` : undefined}
@@ -351,7 +529,7 @@ export default function HistoryView({ onViewJob }) {
                             color: "var(--text-muted)",
                             backgroundColor: "var(--bg-input)",
                           }}
-                          title={isCompleted ? "Descargar máscara NIfTI" : "Solo disponible para estudios completados"}
+                          title={isCompleted ? "Descargar NIfTI" : "Solo para estudios completados"}
                         >
                           <Download className="w-3.5 h-3.5" />
                         </a>
@@ -364,21 +542,22 @@ export default function HistoryView({ onViewJob }) {
           </table>
         </div>
 
-        {/* ── Footer ───────────────────────────────────────────────────── */}
+        {/* ── Footer con paginador ──────────────────────────────────────── */}
         <div
           className="flex items-center justify-between px-5 py-3 border-t"
           style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-input)" }}
         >
+          {/* Info total + páginas */}
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>
             {loading
               ? "Cargando..."
-              : `Mostrando ${jobs.length} de ${total} registros`}
+              : total === 0
+              ? "Sin registros"
+              : `${totalPages} página${totalPages !== 1 ? "s" : ""} · ${total} registros en total`}
           </span>
-          {total > 100 && (
-            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-              Mostrando los 100 más recientes · Usa el buscador para filtrar
-            </span>
-          )}
+
+          {/* Botones de paginación */}
+          <Paginator page={page} totalPages={totalPages} onPage={setPage} />
         </div>
       </div>
     </div>

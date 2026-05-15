@@ -23,6 +23,7 @@ import {
  * @param {object}   props
  * @param {string}   props.activeView        - Currently active view key
  * @param {function} props.onNavigate        - Callback when a nav item is clicked
+ * @param {function} props.onNewAnalysis     - Callback to reset viewer and go back to uploader
  * @param {boolean}  props.collapsed         - Controlled collapsed state
  * @param {function} props.onCollapsedChange - Toggle collapsed state
  */
@@ -31,7 +32,7 @@ const NAV_GROUPS = [
   {
     label: "ANÁLISIS",
     items: [
-      { key: "new-segmentation", label: "Nueva Segmentación", icon: PlusCircle },
+      { key: "new-segmentation", label: "Área de Trabajo", icon: PlusCircle },
     ],
   },
   {
@@ -43,7 +44,7 @@ const NAV_GROUPS = [
   },
 ];
 
-export default function Sidebar({ activeView, onNavigate, collapsed, onCollapsedChange }) {
+export default function Sidebar({ activeView, onNavigate, onNewAnalysis, collapsed, onCollapsedChange }) {
   return (
     <aside
       className={cn(
@@ -97,7 +98,10 @@ export default function Sidebar({ activeView, onNavigate, collapsed, onCollapsed
       <div className={cn("px-4 py-3 shrink-0", collapsed && "px-2")}>
         <button
           id="sidebar-cta-new-analysis"
-          onClick={() => onNavigate("new-segmentation")}
+          onClick={() => {
+            if (onNewAnalysis) onNewAnalysis();
+            else onNavigate("new-segmentation");
+          }}
           className={cn(
             "w-full flex items-center justify-center gap-2 rounded-xl py-2.5 px-4",
             "text-sm font-semibold transition-all duration-200 cursor-pointer",
@@ -108,7 +112,7 @@ export default function Sidebar({ activeView, onNavigate, collapsed, onCollapsed
             color: "oklch(0.13 0.01 260)",
             boxShadow: "0 4px 14px oklch(0.72 0.17 195 / 0.35)",
           }}
-          title="Nueva Segmentación"
+          title="Iniciar un nuevo estudio DICOM"
         >
           <Plus className="w-4 h-4 shrink-0" />
           {!collapsed && <span>Nuevo Análisis</span>}
