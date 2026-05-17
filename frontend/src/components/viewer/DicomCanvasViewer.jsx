@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import dicomParser from "dicom-parser";
-import { Layers3, AlertTriangle, Loader, Eye, EyeOff, ChevronUp, ChevronDown, ZoomIn, ZoomOut, SkipForward, SkipBack } from "lucide-react";
+import { Layers3, AlertTriangle, Loader, Eye, EyeOff, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, SkipForward, SkipBack } from "lucide-react";
 import { API_KEY } from "@/api/client";
 
 const WINDOWS = [
@@ -11,6 +11,10 @@ const WINDOWS = [
 ];
 
 const sliceCache = new Map();
+export function clearViewerCache() {
+  sliceCache.clear();
+}
+
 async function fetchDicom(url) {
   if (sliceCache.has(url)) return sliceCache.get(url);
   const res = await fetch(url, { headers: API_KEY ? { "X-API-Key": API_KEY } : {} });
@@ -164,8 +168,8 @@ function catmullRom(p0, p1, p2, p3, t) {
  * sampling each row by cubic-spline interpolation across the 4 bracketing slices.
  * This eliminates the "stripe" artifact caused by linear interpolation of 5mm gaps.
  */
-function renderCoronal(canvas, slices, coronalY, wc, ww, segData, showSeg, sliceIdx, spacingScale) {
-  if (!canvas || !slices.length) return;
+function renderCoronal(canvas, slices, coronalY, wc, ww, segData, showSeg, sliceIdx, spacingScale, sagittalX) {
+  if (!canvas || !slices.length) return null;
   const n = slices.length;
   const cols = slices[0].cols, rows = slices[0].rows;
   const W = canvas.width, H = canvas.height;
@@ -238,18 +242,29 @@ function renderCoronal(canvas, slices, coronalY, wc, ww, segData, showSeg, slice
     ctx.restore();
   }
 
-  const hYc = oy + ((sliceIdx ?? 0) / Math.max(n-1,1)) * dstH;
-  ctx.save(); ctx.strokeStyle = "rgba(100,180,255,0.7)";
+  // Crosshairs
+  ctx.save();
+  ctx.strokeStyle = "rgba(100,180,255,0.75)";
   ctx.lineWidth = 1; ctx.setLineDash([4,4]);
+  // Horizontal: current axial slice
+  const hYc = oy + ((sliceIdx ?? 0) / Math.max(n-1,1)) * dstH;
   ctx.beginPath(); ctx.moveTo(0, hYc); ctx.lineTo(W, hYc); ctx.stroke();
+  // Vertical: current sagittalX plane
+  if (sagittalX != null) {
+    const hXc = ox + (sagittalX / Math.max(outW-1,1)) * dstW;
+    ctx.strokeStyle = "rgba(255,200,80,0.75)";
+    ctx.beginPath(); ctx.moveTo(hXc, 0); ctx.lineTo(hXc, H); ctx.stroke();
+  }
   ctx.restore();
+  return { ox, oy, dstW, dstH };
 }
+
 
 /**
  * Renders the sagittal MPR plane with true Z linear interpolation.
  */
-function renderSagittal(canvas, slices, sagittalX, wc, ww, segData, showSeg, sliceIdx, spacingScale) {
-  if (!canvas || !slices.length) return;
+function renderSagittal(canvas, slices, sagittalX, wc, ww, segData, showSeg, sliceIdx, spacingScale, coronalY) {
+  if (!canvas || !slices.length) return null;
   const n = slices.length;
   const cols = slices[0].cols, rows = slices[0].rows;
   const W = canvas.width, H = canvas.height;
@@ -322,20 +337,33 @@ function renderSagittal(canvas, slices, sagittalX, wc, ww, segData, showSeg, sli
     ctx.restore();
   }
 
-  const hYs = oy + ((sliceIdx ?? 0) / Math.max(n-1,1)) * dstH;
-  ctx.save(); ctx.strokeStyle = "rgba(100,180,255,0.7)";
+  // Crosshairs
+  ctx.save();
+  ctx.strokeStyle = "rgba(100,180,255,0.75)";
   ctx.lineWidth = 1; ctx.setLineDash([4,4]);
+  // Horizontal: current axial slice
+  const hYs = oy + ((sliceIdx ?? 0) / Math.max(n-1,1)) * dstH;
   ctx.beginPath(); ctx.moveTo(0, hYs); ctx.lineTo(W, hYs); ctx.stroke();
+  // Vertical: current coronalY plane
+  if (coronalY != null) {
+    const hXs = ox + (coronalY / Math.max(outW-1,1)) * dstW;
+    ctx.strokeStyle = "rgba(80,220,120,0.75)";
+    ctx.beginPath(); ctx.moveTo(hXs, 0); ctx.lineTo(hXs, H); ctx.stroke();
+  }
   ctx.restore();
+  return { ox, oy, dstW, dstH };
 }
+
 
 
 export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
   const axialRef    = useRef(null);
   const coronalRef  = useRef(null);
   const sagittalRef = useRef(null);
-  const dragRef        = useRef({ on: false, btn: -1, sx: 0, sy: 0, panStart: null, wcStart: 0, wwStart: 0 });
-  const axialTransform = useRef(null); // stores { ox, oy, scale } from last renderAxial call
+  const dragRef          = useRef({ on: false, btn: -1, sx: 0, sy: 0, panStart: null, wcStart: 0, wwStart: 0 });
+  const axialTransform   = useRef(null);
+  const coronalTransform = useRef(null);
+  const sagittalTransform= useRef(null);
 
   const [status,    setStatus]    = useState("idle");
   const [errMsg,    setErrMsg]    = useState(null);
@@ -368,6 +396,7 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
     let cancelled = false;
     async function load() {
       setStatus("loading"); setProgress(0);
+      setSlices([]); setSegData(null); setSegLoaded(false);
       const urls = dicomImageIds.map(p => `/api${p}`);
       const loaded = [];
       for (let i = 0; i < urls.length; i += 8) {
@@ -419,6 +448,28 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
     return result;
   }, [segData, slices.length]);
 
+  // Segmented Y-rows (for coronal scroll strip)
+  const segYInMask = useMemo(() => {
+    if (!segData) return new Set();
+    const { nx, ny, px } = segData;
+    const result = new Set();
+    for (let i = 0; i < px.length; i++) {
+      if (px[i] > 0) result.add(Math.floor((i % (nx * ny)) / nx));
+    }
+    return result;
+  }, [segData]);
+
+  // Segmented X-columns (for sagittal scroll strip)
+  const segXInMask = useMemo(() => {
+    if (!segData) return new Set();
+    const { nx, px } = segData;
+    const result = new Set();
+    for (let i = 0; i < px.length; i++) {
+      if (px[i] > 0) result.add(i % nx);
+    }
+    return result;
+  }, [segData]);
+
   const getSegSlice = useCallback(() => {
     if (!segData || !slices.length) return null;
     const { nx, ny, nz, px, zFlip } = segData;
@@ -450,25 +501,27 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
     if (status !== "ready" || !slices.length) return;
     const canvas = coronalRef.current;
     if (!canvas) return;
-    renderCoronal(canvas, slices, coronalY, wc, ww, showSeg && segLoaded ? segData : null, showSeg && segLoaded, sliceIdx, spacingScale);
-  }, [status, slices, coronalY, sliceIdx, wc, ww, showSeg, segLoaded, segData, spacingScale]);
+    const t = renderCoronal(canvas, slices, coronalY, wc, ww, showSeg && segLoaded ? segData : null, showSeg && segLoaded, sliceIdx, spacingScale, sagittalX);
+    coronalTransform.current = t;
+  }, [status, slices, coronalY, sliceIdx, wc, ww, showSeg, segLoaded, segData, spacingScale, sagittalX]);
 
   // Render sagittal
   useEffect(() => {
     if (status !== "ready" || !slices.length) return;
     const canvas = sagittalRef.current;
     if (!canvas) return;
-    renderSagittal(canvas, slices, sagittalX, wc, ww, showSeg && segLoaded ? segData : null, showSeg && segLoaded, sliceIdx, spacingScale);
-  }, [status, slices, sagittalX, sliceIdx, wc, ww, showSeg, segLoaded, segData, spacingScale]);
+    const t = renderSagittal(canvas, slices, sagittalX, wc, ww, showSeg && segLoaded ? segData : null, showSeg && segLoaded, sliceIdx, spacingScale, coronalY);
+    sagittalTransform.current = t;
+  }, [status, slices, sagittalX, sliceIdx, wc, ww, showSeg, segLoaded, segData, spacingScale, coronalY]);
 
   // Resize observer
   useEffect(() => {
     [{ ref: axialRef, render: () => {
       if (status==="ready"&&slices.length) renderAxial(axialRef.current, slices[sliceIdx], wc, ww, zoom, pan, getSegSlice(), showSeg&&segLoaded);
     }},{ ref: coronalRef, render: () => {
-      if (status==="ready"&&slices.length) renderCoronal(coronalRef.current, slices, coronalY, wc, ww, showSeg&&segLoaded?segData:null, showSeg&&segLoaded, sliceIdx, spacingScale);
+      if (status==="ready"&&slices.length) { const t=renderCoronal(coronalRef.current, slices, coronalY, wc, ww, showSeg&&segLoaded?segData:null, showSeg&&segLoaded, sliceIdx, spacingScale, sagittalX); coronalTransform.current=t; }
     }},{ ref: sagittalRef, render: () => {
-      if (status==="ready"&&slices.length) renderSagittal(sagittalRef.current, slices, sagittalX, wc, ww, showSeg&&segLoaded?segData:null, showSeg&&segLoaded, sliceIdx, spacingScale);
+      if (status==="ready"&&slices.length) { const t=renderSagittal(sagittalRef.current, slices, sagittalX, wc, ww, showSeg&&segLoaded?segData:null, showSeg&&segLoaded, sliceIdx, spacingScale, coronalY); sagittalTransform.current=t; }
     }}].forEach(({ ref, render }) => {
       if (!ref.current?.parentElement) return;
       const obs = new ResizeObserver(([e]) => {
@@ -524,25 +577,70 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
 
   /** Click on axial canvas → update coronalY + sagittalX for MPR sync */
   function onAxialClick(e) {
-    if (dragRef.current.on) return; // ignore if it was a drag
+    if (dragRef.current.on) return;
     const canvas = axialRef.current;
     const t = axialTransform.current;
     if (!canvas || !t) return;
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width  / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const cx = (e.clientX - rect.left)  * scaleX;
-    const cy = (e.clientY - rect.top)   * scaleY;
+    const scaleX = canvas.width / rect.width, scaleY = canvas.height / rect.height;
+    const cx = (e.clientX - rect.left) * scaleX;
+    const cy = (e.clientY - rect.top)  * scaleY;
     const xi = Math.round((cx - t.ox) / t.scale);
     const yi = Math.round((cy - t.oy) / t.scale);
-    const imgCols = slices[0]?.cols ?? 512;
-    const imgRows = slices[0]?.rows ?? 512;
-    if (xi >= 0 && xi < imgCols) setSagittalX(xi);
-    if (yi >= 0 && yi < imgRows) setCoronalY(yi);
+    if (xi >= 0 && xi < (slices[0]?.cols ?? 512)) setSagittalX(xi);
+    if (yi >= 0 && yi < (slices[0]?.rows ?? 512)) setCoronalY(yi);
+  }
+  /** Axial hover → real-time crosshair update (not dragging) */
+  function onAxialHover(e) {
+    if (dragRef.current.on) return;
+    const canvas = axialRef.current;
+    const t = axialTransform.current;
+    if (!canvas || !t || !slices.length) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width, scaleY = canvas.height / rect.height;
+    const cx = (e.clientX - rect.left) * scaleX;
+    const cy = (e.clientY - rect.top)  * scaleY;
+    const xi = Math.round((cx - t.ox) / t.scale);
+    const yi = Math.round((cy - t.oy) / t.scale);
+    if (xi >= 0 && xi < (slices[0]?.cols ?? 512)) setSagittalX(xi);
+    if (yi >= 0 && yi < (slices[0]?.rows ?? 512)) setCoronalY(yi);
+  }
+  /** Coronal hover → update sagittalX and sliceIdx */
+  function onCoronalHover(e) {
+    const t = coronalTransform.current;
+    if (!t || !slices.length) return;
+    const canvas = coronalRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const cx = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const cy = (e.clientY - rect.top)  * (canvas.height / rect.height);
+    const relX = Math.max(0, Math.min(1, (cx - t.ox) / t.dstW));
+    const relY = Math.max(0, Math.min(1, (cy - t.oy) / t.dstH));
+    const xi = Math.round(relX * ((slices[0]?.cols ?? 512) - 1));
+    const zi = Math.round(relY * (slices.length - 1));
+    setSagittalX(xi);
+    setSliceIdx(zi);
+  }
+  /** Sagittal hover → update coronalY and sliceIdx */
+  function onSagittalHover(e) {
+    const t = sagittalTransform.current;
+    if (!t || !slices.length) return;
+    const canvas = sagittalRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const cx = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const cy = (e.clientY - rect.top)  * (canvas.height / rect.height);
+    const relX = Math.max(0, Math.min(1, (cx - t.ox) / t.dstW));
+    const relY = Math.max(0, Math.min(1, (cy - t.oy) / t.dstH));
+    const yi = Math.round(relX * ((slices[0]?.rows ?? 512) - 1));
+    const zi = Math.round(relY * (slices.length - 1));
+    setCoronalY(yi);
+    setSliceIdx(zi);
   }
   function onDown(e) { e.preventDefault(); dragRef.current={on:true,btn:e.button,sx:e.clientX,sy:e.clientY,panStart:{...pan},wcStart:wc,wwStart:ww}; }
   function onMove(e) {
-    const d=dragRef.current; if (!d.on) return;
+    const d=dragRef.current;
+    if (!d.on) return;
     const dx=e.clientX-d.sx, dy=e.clientY-d.sy;
     if (d.btn===0){setWc(Math.round(d.wcStart-dy*4));setWw(Math.max(1,Math.round(d.wwStart+dx*8)));setWinIdx(-1);}
     else if(d.btn===2) setPan({x:d.panStart.x+dx,y:d.panStart.y+dy});
@@ -554,36 +652,73 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
   const hasSegHere = segmentedSlices.has(sliceIdx);
 
   return (
-    <div className="flex flex-col overflow-hidden" style={{ height: "100%", padding: 0 }}>
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b"
-        style={{ backgroundColor: "var(--bg-input)", borderColor: "var(--border-subtle)" }}>
-        <div className="flex items-center gap-3">
-          <Layers3 className="w-5 h-5" style={{ color: "var(--text-accent)" }} />
-          <h3 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>Visor CT</h3>
-          {status==="ready" && <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor:"oklch(0.72 0.17 195/0.15)",color:"oklch(0.72 0.17 195)" }}>{n} slices</span>}
-          {segLoaded && (
-            <button onClick={()=>setShowSeg(s=>!s)} className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full transition-all"
-              style={{ backgroundColor:showSeg?"oklch(0.65 0.22 20/0.2)":"var(--bg-card)", color:showSeg?"oklch(0.75 0.22 20)":"var(--text-muted)", border:`1px solid ${showSeg?"oklch(0.65 0.22 20/0.4)":"var(--border-subtle)"}` }}>
-              {showSeg?<Eye className="w-3 h-3"/>:<EyeOff className="w-3 h-3"/>}
-              Segmentación {segArr.length>0 && `(${segArr.length} cortes)`}
-            </button>
+    <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      {/* Toolbar / Header */}
+      <div className="flex flex-wrap items-center justify-between px-5 py-3 border-b shrink-0 z-10 shadow-sm gap-4"
+        style={{ backgroundColor: "var(--bg-sidebar)", borderColor: "var(--border-subtle)" }}>
+        
+        {/* Left: Slices and Navigation */}
+        <div className="flex flex-wrap items-center gap-6">
+          {status==="ready" && (
+            <div className="flex items-center gap-2.5 bg-black/20 px-3 py-1.5 rounded-lg border" style={{ borderColor: "var(--border-subtle)", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.1)" }}>
+              <Layers3 className="w-4 h-4" style={{ color: "var(--text-accent)" }} />
+              <span className="text-sm font-mono font-bold tracking-wide" style={{ color: "var(--text-primary)" }}>
+                {sliceIdx + 1} <span style={{ color: "var(--text-muted)", fontWeight: "normal" }}>/ {n}</span>
+              </span>
+            </div>
           )}
-          {segLoaded && segArr.length > 0 && (
-            <div className="flex items-center gap-1">
-              <button onClick={()=>jumpToSeg(-1)} title="Anterior hallazgo" className="p-1 rounded hover:bg-white/10 transition-colors" style={{ color:"var(--text-muted)" }}><SkipBack className="w-4 h-4"/></button>
-              <span className="text-[10px]" style={{ color:"var(--text-muted)" }}>{hasSegHere?"● hallazgo aquí":""}</span>
-              <button onClick={()=>jumpToSeg(1)} title="Siguiente hallazgo" className="p-1 rounded hover:bg-white/10 transition-colors" style={{ color:"var(--text-muted)" }}><SkipForward className="w-4 h-4"/></button>
+
+          {segLoaded && (
+            <div className="flex items-center bg-black/20 rounded-lg border overflow-hidden" style={{ borderColor: showSeg ? "oklch(0.65 0.22 20/0.4)" : "var(--border-subtle)", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.1)" }}>
+              <button 
+                onClick={()=>setShowSeg(s=>!s)} 
+                className="flex items-center gap-2 px-3 py-1.5 text-xs font-bold tracking-wide transition-colors shrink-0 whitespace-nowrap"
+                style={{ 
+                  backgroundColor: showSeg ? "oklch(0.65 0.22 20/0.15)" : "transparent", 
+                  color: showSeg ? "oklch(0.65 0.22 20)" : "var(--text-muted)" 
+                }}
+              >
+                {showSeg ? <Eye className="w-3.5 h-3.5"/> : <EyeOff className="w-3.5 h-3.5"/>}
+                MÁSCARA IA
+              </button>
+              
+              {segArr.length > 0 && (
+                <div className="flex items-center px-1.5 py-1 gap-1 border-l" style={{ borderColor: "var(--border-subtle)", backgroundColor: "transparent" }}>
+                  <button onClick={()=>jumpToSeg(-1)} title="Anterior hallazgo" className="p-1 rounded hover:bg-white/10 transition-colors" style={{ color:"var(--text-secondary)" }}><SkipBack className="w-3.5 h-3.5"/></button>
+                  <span className="text-[11px] font-mono font-semibold w-16 text-center" style={{ color: hasSegHere ? "oklch(0.65 0.22 20)" : "var(--text-muted)" }}>
+                    {segArr.length} cortes
+                  </span>
+                  <button onClick={()=>jumpToSeg(1)} title="Siguiente hallazgo" className="p-1 rounded hover:bg-white/10 transition-colors" style={{ color:"var(--text-secondary)" }}><SkipForward className="w-3.5 h-3.5"/></button>
+                </div>
+              )}
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          {status==="loading" && <div className="flex items-center gap-2 mr-2"><Loader className="w-4 h-4 animate-spin" style={{ color:"var(--text-accent)" }}/><span className="text-xs" style={{ color:"var(--text-muted)" }}>{progress}%</span></div>}
-          {WINDOWS.map((w,i)=>(
-            <button key={w.label} onClick={()=>applyPreset(i)} className="text-[10px] px-2 py-1 rounded font-medium transition-all"
-              style={{ backgroundColor:i===winIdx?"var(--text-accent)":"var(--bg-card)",color:i===winIdx?"#fff":"var(--text-muted)" }}>{w.label}</button>
-          ))}
-          <div className="w-px h-4" style={{ backgroundColor:"var(--border-subtle)" }}/>
+
+        {/* Right: Presets and Status */}
+        <div className="flex flex-wrap items-center gap-6">
+          {status==="loading" && (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-black/20 rounded-lg border shrink-0" style={{ borderColor: "var(--border-subtle)" }}>
+              <Loader className="w-4 h-4 animate-spin" style={{ color:"var(--text-accent)" }}/>
+              <span className="text-xs font-bold" style={{ color:"var(--text-primary)" }}>{progress}%</span>
+            </div>
+          )}
+          
+          <div className="flex flex-wrap items-center gap-2 bg-black/20 rounded-lg border p-1.5" style={{ borderColor: "var(--border-subtle)", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.1)" }}>
+            {WINDOWS.map((w,i)=>(
+              <button key={w.label} onClick={()=>applyPreset(i)} className="text-[11px] px-4 py-1.5 rounded-md font-bold transition-all uppercase tracking-wider shrink-0 whitespace-nowrap"
+                style={{ 
+                  backgroundColor: i===winIdx ? "var(--bg-elevated)" : "transparent",
+                  color: i===winIdx ? "var(--text-primary)" : "var(--text-muted)",
+                  boxShadow: i===winIdx ? "0 1px 3px rgba(0,0,0,0.2)" : "none"
+                }}
+              >
+                {w.label}
+              </button>
+            ))}
+          </div>
+          
+          <div className="w-px h-5" style={{ backgroundColor:"var(--border-subtle)" }}/>
           <button onClick={()=>setZoom(z=>Math.min(8,z+0.25))} className="p-1 rounded hover:bg-white/10" style={{ color:"var(--text-muted)" }}><ZoomIn className="w-4 h-4"/></button>
           <button onClick={()=>setZoom(z=>Math.max(0.25,z-0.25))} className="p-1 rounded hover:bg-white/10" style={{ color:"var(--text-muted)" }}><ZoomOut className="w-4 h-4"/></button>
         </div>
@@ -598,8 +733,9 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
         </div>
       )}
 
-      {/* ── 3-panel MPR layout: Axial | Coronal | Sagittal ───────────────── */}
-      <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr", flex: 1, minHeight: 0, backgroundColor:"#000" }}>
+      {/* Grid wrapper — takes all remaining flex space; grid fills it absolutely */}
+      <div style={{ flex: 1, minHeight: 0, position: "relative", overflow: "hidden" }}>
+        <div style={{ position: "absolute", inset: 0, display:"grid", gridTemplateColumns:"1fr 1fr 1fr", backgroundColor:"#000" }}>
 
         {/* ── Axial ─────────────────────────────────────────────────────── */}
         <div className="relative overflow-hidden"
@@ -649,7 +785,7 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
 
         {/* ── Coronal ───────────────────────────────────────────────────── */}
         <div className="relative overflow-hidden"
-          style={{ borderRight:"1px solid oklch(0.2 0 0)", cursor:"ns-resize" }}
+          style={{ borderRight:"1px solid oklch(0.2 0 0)", cursor:"crosshair" }}
           onClick={e=>{
             // click on coronal → jump to that axial slice
             const canvas = coronalRef.current;
@@ -665,14 +801,36 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
           <div className="absolute top-1 left-2 z-10 text-[10px] font-mono pointer-events-none select-none"
             style={{ color:"oklch(0.72 0.17 195)" }}>CORONAL</div>
           <div className="absolute top-1 right-2 z-10 text-[10px] font-mono pointer-events-none select-none"
-            style={{ color:"oklch(0.5 0 0)" }}>Y={coronalY} ↕scroll</div>
-          <div className="absolute bottom-1 left-2 z-10 text-[10px] font-mono pointer-events-none select-none"
-            style={{ color:"oklch(0.45 0 0)" }}>click→saltar corte</div>
+            style={{ color:"oklch(0.5 0 0)" }}>Y={coronalY}</div>
+          {status==="ready" && (
+            <div className="absolute bottom-0 left-0 right-0 flex items-center gap-1 px-2 py-1"
+              style={{ backgroundColor:"rgba(0,0,0,0.65)", borderTop:"1px solid oklch(0.2 0 0)" }}>
+              <button onClick={()=>setCoronalY(y=>Math.max(0,y-4))} className="p-0.5 rounded hover:bg-white/10" style={{color:"var(--text-muted)"}}><ChevronLeft className="w-3 h-3"/></button>
+              <div className="relative flex-1 h-4 rounded overflow-hidden" style={{backgroundColor:"rgba(255,255,255,0.05)"}}>
+                {(() => {
+                  const total = slices[0]?.rows || 512;
+                  const ns = Math.min(total, 200);
+                  const ny = segData?.ny || 1;
+                  return Array.from({length:ns},(_,i) => {
+                    const cy = Math.round((i/ns)*total);
+                    const isAct = Math.abs(cy-coronalY) < Math.ceil(total/ns)*1.5;
+                    const yi = segData ? Math.min(Math.round((cy/Math.max(total-1,1))*(ny-1)),ny-1) : -1;
+                    const hasSeg = segYInMask.has(yi);
+                    return <div key={i} onClick={()=>setCoronalY(cy)}
+                      style={{position:"absolute",left:`${(i/ns)*100}%`,top:0,bottom:0,width:`${100/ns}%`,cursor:"pointer",
+                        backgroundColor:isAct?"rgba(255,255,255,0.9)":hasSeg?"rgba(255,60,60,0.7)":"transparent"}}/>;
+                  });
+                })()}
+              </div>
+              <button onClick={()=>setCoronalY(y=>Math.min((slices[0]?.rows||512)-1,y+4))} className="p-0.5 rounded hover:bg-white/10" style={{color:"var(--text-muted)"}}><ChevronRight className="w-3 h-3"/></button>
+              <span className="text-[9px] font-mono ml-1" style={{color:"oklch(0.5 0 0)"}}>{coronalY+1}/{slices[0]?.rows||512}</span>
+            </div>
+          )}
         </div>
 
         {/* ── Sagittal ──────────────────────────────────────────────────── */}
         <div className="relative overflow-hidden"
-          style={{ cursor:"ns-resize" }}
+          style={{ cursor:"crosshair" }}
           onClick={e=>{
             const canvas = sagittalRef.current;
             if (!canvas || !slices.length) return;
@@ -687,21 +845,63 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
           <div className="absolute top-1 left-2 z-10 text-[10px] font-mono pointer-events-none select-none"
             style={{ color:"oklch(0.80 0.16 80)" }}>SAGITAL</div>
           <div className="absolute top-1 right-2 z-10 text-[10px] font-mono pointer-events-none select-none"
-            style={{ color:"oklch(0.5 0 0)" }}>X={sagittalX} ↕scroll</div>
-          <div className="absolute bottom-1 left-2 z-10 text-[10px] font-mono pointer-events-none select-none"
-            style={{ color:"oklch(0.45 0 0)" }}>click→saltar corte</div>
+            style={{ color:"oklch(0.5 0 0)" }}>X={sagittalX}</div>
+          {status==="ready" && (
+            <div className="absolute bottom-0 left-0 right-0 flex items-center gap-1 px-2 py-1"
+              style={{ backgroundColor:"rgba(0,0,0,0.65)", borderTop:"1px solid oklch(0.2 0 0)" }}>
+              <button onClick={()=>setSagittalX(x=>Math.max(0,x-4))} className="p-0.5 rounded hover:bg-white/10" style={{color:"var(--text-muted)"}}><ChevronLeft className="w-3 h-3"/></button>
+              <div className="relative flex-1 h-4 rounded overflow-hidden" style={{backgroundColor:"rgba(255,255,255,0.05)"}}>
+                {(() => {
+                  const total = slices[0]?.cols || 512;
+                  const ns = Math.min(total, 200);
+                  const nx = segData?.nx || 1;
+                  return Array.from({length:ns},(_,i) => {
+                    const cx = Math.round((i/ns)*total);
+                    const isAct = Math.abs(cx-sagittalX) < Math.ceil(total/ns)*1.5;
+                    const xi = segData ? Math.min(Math.round((cx/Math.max(total-1,1))*(nx-1)),nx-1) : -1;
+                    const hasSeg = segXInMask.has(xi);
+                    return <div key={i} onClick={()=>setSagittalX(cx)}
+                      style={{position:"absolute",left:`${(i/ns)*100}%`,top:0,bottom:0,width:`${100/ns}%`,cursor:"pointer",
+                        backgroundColor:isAct?"rgba(255,255,255,0.9)":hasSeg?"rgba(255,60,60,0.7)":"transparent"}}/>;
+                  });
+                })()}
+              </div>
+              <button onClick={()=>setSagittalX(x=>Math.min((slices[0]?.cols||512)-1,x+4))} className="p-0.5 rounded hover:bg-white/10" style={{color:"var(--text-muted)"}}><ChevronRight className="w-3 h-3"/></button>
+              <span className="text-[9px] font-mono ml-1" style={{color:"oklch(0.5 0 0)"}}>{sagittalX+1}/{slices[0]?.cols||512}</span>
+            </div>
+          )}
         </div>
 
-      </div>
+        </div>{/* /grid (position:absolute, 3 columns) */}
 
+        {/* ── W/L Slider — absolutely overlaid on right edge ────────── */}
+        <div style={{ position:"absolute", right:0, top:0, bottom:0, width:"68px", zIndex:10,
+          display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"space-evenly",
+          borderLeft:"1px solid oklch(0.18 0 0)", backgroundColor:"oklch(0.08 0 0)", padding:"10px 6px" }}>
 
-      {status==="ready" && (
-        <div className="flex items-center gap-5 px-5 py-2 border-t text-[10px]" style={{ backgroundColor:"var(--bg-input)",borderColor:"var(--border-subtle)",color:"var(--text-muted)" }}>
-          {[["Scroll","Axial"],["Click axial","Sync MPR"],["Ctrl+Scroll","Zoom"],["Click izq+drag","W/L"],["Click der+drag","Pan"],["Coronal ↕","Plano Y"],["Sagital ↕","Plano X"]].map(([k,a])=>(
-            <span key={k}><span className="font-mono px-1.5 py-0.5 rounded mr-1" style={{ backgroundColor:"var(--bg-card)" }}>{k}</span>{a}</span>
-          ))}
+          <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:"4px" }}>
+            <span style={{ fontSize:"9px", fontFamily:"monospace", color:"oklch(0.65 0 0)", textTransform:"uppercase" }}>WW</span>
+            <span style={{ fontSize:"11px", fontFamily:"monospace", color:"oklch(0.72 0.17 195)", fontWeight:600 }}>{ww}</span>
+            <input type="range" min={1} max={4096} value={ww}
+              onChange={e=>{ setWw(+e.target.value); setWinIdx(-1); }}
+              style={{ writingMode:"vertical-lr", direction:"rtl", height:"120px", cursor:"pointer",
+                accentColor:"oklch(0.72 0.17 195)" }}/>
+          </div>
+
+          <div style={{ width:"80%", height:"1px", backgroundColor:"oklch(0.2 0 0)" }}/>
+
+          <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:"4px" }}>
+            <span style={{ fontSize:"9px", fontFamily:"monospace", color:"oklch(0.65 0 0)", textTransform:"uppercase" }}>WC</span>
+            <span style={{ fontSize:"11px", fontFamily:"monospace", color:"oklch(0.80 0.16 80)", fontWeight:600 }}>{wc}</span>
+            <input type="range" min={-1024} max={3071} value={wc}
+              onChange={e=>{ setWc(+e.target.value); setWinIdx(-1); }}
+              style={{ writingMode:"vertical-lr", direction:"rtl", height:"120px", cursor:"pointer",
+                accentColor:"oklch(0.80 0.16 80)" }}/>
+          </div>
+
         </div>
-      )}
+      </div>{/* /grid wrapper (flex:1 position:relative) */}
+
     </div>
   );
 }

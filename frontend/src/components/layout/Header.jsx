@@ -1,6 +1,6 @@
 import { useApiHealth } from "@/hooks/useApiHealth";
 import { cn } from "@/lib/utils";
-import { Sun, Moon, Wifi, WifiOff } from "lucide-react";
+import { Sun, Moon, Wifi, WifiOff, User } from "lucide-react";
 
 /**
  * Header — Top bar with page title, API status indicator, and theme toggle.
@@ -25,16 +25,13 @@ export default function Header({ title, subtitle, theme, onToggleTheme }) {
       {/* --- Left: Title --- */}
       <div>
         <h2
-          className="text-xl font-bold tracking-tight"
+          className="text-xl font-black tracking-tight"
           style={{ color: "var(--text-primary)" }}
         >
           {title}
         </h2>
         {subtitle && (
-          <p
-            className="text-sm mt-0.5"
-            style={{ color: "var(--text-secondary)" }}
-          >
+          <p className="text-[13px] font-medium mt-0.5" style={{ color: "var(--text-muted)" }}>
             {subtitle}
           </p>
         )}

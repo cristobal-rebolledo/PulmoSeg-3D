@@ -3,7 +3,41 @@ import DicomCanvasViewer from "@/components/viewer/DicomCanvasViewer";
 import ViewerPanel from "./ViewerPanel";
 import SuccessToast from "./SuccessToast";
 import MetricsBar from "./MetricsBar";
-import LogsAccordion from "./LogsAccordion";
+import { ScanLine } from "lucide-react";
+
+// ── EmptyViewer — shown when no study is selected ───────────────────────────
+function EmptyViewer() {
+  return (
+    <div style={{
+      flex: 1,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 20,
+      backgroundColor: "#000",
+    }}>
+      <div style={{
+        width: 80, height: 80, borderRadius: 20,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        backgroundColor: "oklch(0.72 0.17 195 / 0.08)",
+        border: "1px solid oklch(0.72 0.17 195 / 0.15)",
+      }}>
+        <ScanLine style={{ width: 40, height: 40, color: "oklch(0.72 0.17 195 / 0.5)" }} />
+      </div>
+      <div style={{ textAlign: "center" }}>
+        <p style={{ fontSize: 16, fontWeight: 600, color: "oklch(0.85 0.02 260)", margin: 0 }}>
+          Sin estudio seleccionado
+        </p>
+        <p style={{ fontSize: 13, color: "oklch(0.55 0.02 260)", margin: "6px 0 0" }}>
+          Arrastra una carpeta DICOM en el panel lateral
+          <br />o selecciona un estudio completado para visualizarlo.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 
 const LINE_COLOR = {
   info:    "oklch(0.72 0.17 195)",
@@ -18,7 +52,8 @@ function buildConsoleLines(stateHistory, artifacts, clinicalResults) {
     { type: "info", text: "[pulmoseg.worker] Worker iniciado — procesando Job..." },
   ];
   (stateHistory ?? []).forEach((entry) => {
-    const time = new Date(entry.time).toLocaleTimeString("es-CL", {
+    const timeStr = entry.time.endsWith("Z") ? entry.time : entry.time + "Z";
+    const time = new Date(timeStr).toLocaleTimeString("es-CL", {
       hour: "2-digit", minute: "2-digit", second: "2-digit",
     });
     const t = entry.state === "COMPLETED" ? "success"
@@ -51,10 +86,11 @@ function buildConsoleLines(stateHistory, artifacts, clinicalResults) {
  *   └─ LogsAccordion (colapsable, empuja desde abajo) ───┘
  *   + SuccessToast (position:fixed, esquina inferior)
  */
-export default function ResultsDashboard({ clinicalResults, artifacts, stateHistory, jobId, patientId }) {
+export default function ResultsDashboard({ clinicalResults, artifacts, stateHistory, jobId, patientId, onCloseStudy }) {
   const [toastVisible, setToastVisible] = useState(true);
 
-  if (!clinicalResults) return null;
+  // No job selected — show persistent empty viewer state
+  if (!clinicalResults) return <EmptyViewer />;
 
   const consoleLines = buildConsoleLines(stateHistory, artifacts, clinicalResults);
 
@@ -71,9 +107,10 @@ export default function ResultsDashboard({ clinicalResults, artifacts, stateHist
         clinicalResults={clinicalResults}
         patientId={patientId}
         stateHistory={stateHistory}
+        onCloseStudy={onCloseStudy}
       />
 
-      <div className="flex-1 overflow-hidden" style={{ backgroundColor: "#000" }}>
+      <div className="flex-1 overflow-hidden" style={{ backgroundColor: "#000", position: "relative" }}>
         {artifacts?.dicom_image_ids?.length > 0 && jobId ? (
           <DicomCanvasViewer
             jobId={jobId}
@@ -84,7 +121,7 @@ export default function ResultsDashboard({ clinicalResults, artifacts, stateHist
         )}
       </div>
 
-      <LogsAccordion consoleLines={consoleLines} lineColor={LINE_COLOR} />
+
     </div>
   );
 }

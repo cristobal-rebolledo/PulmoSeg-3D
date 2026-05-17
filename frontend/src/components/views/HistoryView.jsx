@@ -17,8 +17,6 @@ const STATUS_STYLES = {
   CANCELLED:  { label: "Cancelado",   color: "oklch(0.55 0.05 260)", bg: "oklch(0.55 0.05 260 / 0.1)" },
 };
 
-const PAGE_SIZE_OPTIONS = [10, 25, 50];
-
 // ---------------------------------------------------------------------------
 // Debounce hook
 // ---------------------------------------------------------------------------
@@ -187,22 +185,18 @@ export default function HistoryView({ onViewJob }) {
     setPage(1);
   }, [debouncedSearch]);
 
-  // Al cambiar tamaño de página volvemos a página 1
-  const handlePageSize = (size) => {
-    setPageSize(size);
-    setPage(1);
-  };
-
   // ── Helpers de formato ───────────────────────────────────────────────────
   function fmtDate(iso) {
     if (!iso) return "—";
-    return new Date(iso).toLocaleDateString("es-CL", {
+    const d = iso.endsWith("Z") ? iso : iso + "Z";
+    return new Date(d).toLocaleDateString("es-CL", {
       year: "numeric", month: "short", day: "numeric",
     });
   }
   function fmtTime(iso) {
     if (!iso) return "";
-    return new Date(iso).toLocaleTimeString("es-CL", {
+    const d = iso.endsWith("Z") ? iso : iso + "Z";
+    return new Date(d).toLocaleTimeString("es-CL", {
       hour: "2-digit", minute: "2-digit",
     });
   }
@@ -222,7 +216,7 @@ export default function HistoryView({ onViewJob }) {
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <div className="max-w-7xl mx-auto space-y-5 animate-[fade-in_0.4s_ease-out]">
+    <div className="max-w-7xl mx-auto px-8 space-y-5 animate-[fade-in_0.4s_ease-out]">
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
@@ -306,42 +300,6 @@ export default function HistoryView({ onViewJob }) {
       {/* ── Tabla ──────────────────────────────────────────────────────── */}
       <div className="glass-card overflow-hidden" style={{ padding: 0 }}>
 
-        {/* Sub-header: selector de filas + info de página */}
-        <div
-          className="flex items-center justify-between px-5 py-2.5 border-b"
-          style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-input)" }}
-        >
-          {/* "Mostrar X entradas" */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs" style={{ color: "var(--text-muted)" }}>Mostrar</span>
-            <select
-              id="history-page-size"
-              value={pageSize}
-              onChange={(e) => handlePageSize(Number(e.target.value))}
-              className="text-xs rounded px-2 py-1 border outline-none cursor-pointer"
-              style={{
-                borderColor: "var(--border-subtle)",
-                backgroundColor: "var(--bg-card)",
-                color: "var(--text-primary)",
-              }}
-            >
-              {PAGE_SIZE_OPTIONS.map((s) => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
-            <span className="text-xs" style={{ color: "var(--text-muted)" }}>entradas</span>
-          </div>
-
-          {/* Info de rango */}
-          <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-            {loading
-              ? "Cargando..."
-              : total === 0
-              ? "Sin registros"
-              : `Mostrando ${firstRow}–${lastRow} de ${total} registros`}
-          </span>
-        </div>
-
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
@@ -349,10 +307,13 @@ export default function HistoryView({ onViewJob }) {
                 className="border-b"
                 style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-input)" }}
               >
-                {["ID Estudio", "Paciente", "Archivos", "Fecha", "Estado", "Volumen (mL)", "Diámetro (mm)", "Acciones"].map((h) => (
+                {["ID Estudio", "Paciente", "Archivos", "Fecha", "Estado", "Volumen (mL)", "Diámetro (mm)", "Visualizar"].map((h, idx) => (
                   <th
                     key={h}
-                    className="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider"
+                    className={cn(
+                      "py-3.5 text-left text-xs font-semibold uppercase tracking-wider",
+                      idx === 0 ? "pl-10 pr-5" : "px-5"
+                    )}
                     style={{ color: "var(--text-secondary)" }}
                   >
                     {h}
@@ -413,7 +374,7 @@ export default function HistoryView({ onViewJob }) {
                     }}
                   >
                     {/* ── ID Estudio ── */}
-                    <td className="px-5 py-3.5">
+                    <td className="pl-10 pr-5 py-3.5">
                       <div
                         className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg"
                         style={{
@@ -512,27 +473,6 @@ export default function HistoryView({ onViewJob }) {
                           <Eye className="w-3.5 h-3.5" />
                           Ver Detalle
                         </button>
-
-                        <a
-                          id={`history-download-${row.job_id}`}
-                          href={isCompleted ? `/api/nifti/${row.job_id}` : undefined}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className={cn(
-                            "flex items-center justify-center w-8 h-8 rounded-lg border transition-all",
-                            isCompleted
-                              ? "cursor-pointer hover:border-[var(--border-accent)]"
-                              : "opacity-40 cursor-not-allowed pointer-events-none"
-                          )}
-                          style={{
-                            borderColor: "var(--border-subtle)",
-                            color: "var(--text-muted)",
-                            backgroundColor: "var(--bg-input)",
-                          }}
-                          title={isCompleted ? "Descargar NIfTI" : "Solo para estudios completados"}
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                        </a>
                       </div>
                     </td>
                   </tr>
@@ -553,7 +493,7 @@ export default function HistoryView({ onViewJob }) {
               ? "Cargando..."
               : total === 0
               ? "Sin registros"
-              : `${totalPages} página${totalPages !== 1 ? "s" : ""} · ${total} registros en total`}
+              : `Mostrando ${firstRow}–${lastRow} de ${total} registros`}
           </span>
 
           {/* Botones de paginación */}
