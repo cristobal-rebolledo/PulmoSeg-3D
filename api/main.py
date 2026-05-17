@@ -17,6 +17,7 @@ Seguridad:
   - Los archivos DICOM se conservan en temp_{job_id}/ para re-análisis clínico.
 """
 
+import asyncio
 import logging
 import os
 import shutil
@@ -27,7 +28,6 @@ from typing import List
 
 from dotenv import load_dotenv
 from fastapi import (
-    BackgroundTasks,
     Depends,
     FastAPI,
     File,
@@ -90,6 +90,62 @@ LOCAL_STORAGE_DIRS = [
     LOCAL_STORAGE_BASE / "models",   # Simula GCS bucket de pesos del modelo
 ]
 
+# ---------------------------------------------------------------------------
+# Cola FIFO de trabajos de segmentación
+#
+# Cada elemento es un dict con los argumentos necesarios para run_segmentation_job.
+# El worker coroutine (queue_worker) procesa los jobs de uno en uno, garantizando
+# que la GPU/CPU no sea compartida entre inferencias concurrentes.
+# ---------------------------------------------------------------------------
+job_queue: asyncio.Queue = asyncio.Queue()
+
+
+async def queue_worker() -> None:
+    """
+    Worker coroutine que consume la job_queue de forma secuencial (FIFO).
+
+    Se ejecuta indefinidamente en el event loop del servidor FastAPI.
+    Para cada job dequeued:
+      1. Lanza run_segmentation_job en el thread pool (loop.run_in_executor)
+         para no bloquear el event loop mientras la inferencia MONAI se ejecuta.
+      2. Espera a que el job actual termine ANTES de procesar el siguiente.
+      3. Marca la tarea como completada con job_queue.task_done().
+
+    Al recibir CancelledError (shutdown del servidor), termina limpiamente.
+    """
+    logger.info("🚀 Queue worker iniciado — procesando jobs en serie (FIFO).")
+    loop = asyncio.get_event_loop()
+
+    while True:
+        try:
+            job_payload = await job_queue.get()
+        except asyncio.CancelledError:
+            logger.info("⏹️  Queue worker detenido.")
+            break
+
+        job_id = job_payload.get("job_id", "unknown")
+        logger.info(
+            f"[{job_id}] Dequeued — "
+            f"posición en cola restante: {job_queue.qsize()}"
+        )
+
+        try:
+            # run_in_executor permite que run_segmentation_job (función síncrona
+            # y bloqueante) corra en el thread pool sin bloquear el event loop.
+            # El await asegura que el siguiente job NO empiece hasta que este termine.
+            await loop.run_in_executor(
+                None,
+                lambda p=job_payload: run_segmentation_job(**p),
+            )
+        except Exception as exc:
+            logger.error(
+                f"[{job_id}] ❌ Error no capturado en queue_worker: {exc}",
+                exc_info=True,
+            )
+        finally:
+            job_queue.task_done()
+            logger.info(f"[{job_id}] ✅ Task done — cola restante: {job_queue.qsize()}")
+
 
 # ---------------------------------------------------------------------------
 # Dependencia de seguridad — Verificación de API Key
@@ -127,9 +183,15 @@ def verify_api_key(x_api_key: str = Header(..., alias="X-API-Key")) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Evento de startup de FastAPI.
-    1. Crea las tablas SQLite si no existen.
-    2. Crea los directorios de local_storage si no existen.
+    Lifespan de FastAPI.
+
+    Startup:
+      1. Crea las tablas SQLite si no existen.
+      2. Crea los directorios de local_storage si no existen.
+      3. Lanza el queue_worker como tarea asyncio para procesamiento serial de jobs.
+
+    Shutdown:
+      4. Cancela el queue_worker limpiamente.
     """
     # 1. Crear tablas SQLite
     logger.info("Inicializando base de datos SQLite...")
@@ -141,10 +203,20 @@ async def lifespan(app: FastAPI):
         dir_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"Directorio de almacenamiento verificado: {dir_path}")
 
-    logger.info("PulmoSeg 3D API lista para recibir solicitudes.")
+    # 3. Iniciar el worker de cola — procesa jobs en serie (FIFO)
+    worker_task = asyncio.create_task(queue_worker())
+    logger.info("PulmoSeg 3D API lista — queue worker activo.")
+
     yield
-    # Cleanup (si fuera necesario en el futuro)
-    logger.info("Apagando PulmoSeg 3D API...")
+
+    # 4. Shutdown: cancelar el worker y esperar a que termine
+    logger.info("Apagando PulmoSeg 3D API — cancelando queue worker...")
+    worker_task.cancel()
+    try:
+        await worker_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("Queue worker detenido. API apagada.")
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +276,6 @@ app.add_middleware(
     ),
 )
 async def create_segmentation_job(
-    background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(
         ..., description="Archivos DICOM (.dcm) del estudio a segmentar"
     ),
@@ -302,15 +373,16 @@ async def create_segmentation_job(
 
     logger.info(f"Job creado: {job_id} | Status: QUEUED | Files: {saved_count}")
 
-    # --- 6. Lanzar tarea en segundo plano ---
-    background_tasks.add_task(
-        run_segmentation_job,
-        job_id=job_id,
-        request_data=request_data,
-        dicom_dir=str(temp_dicom_dir),
-    )
+    # --- 6. Encolar job para procesamiento serial ---
+    await job_queue.put({
+        "job_id": job_id,
+        "request_data": request_data,
+        "dicom_dir": str(temp_dicom_dir),
+    })
 
-    logger.info(f"BackgroundTask lanzada para Job: {job_id}")
+    logger.info(
+        f"Job encolado: {job_id} | Posición en cola: {job_queue.qsize()}"
+    )
 
     # --- 7. Retornar 202 Accepted ---
     return SegmentationJobResponse(
@@ -398,7 +470,6 @@ def cancel_job(
     ),
 )
 async def create_segmentation_job_from_nifti(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(
         ..., description="Archivo NIfTI (.nii o .nii.gz) del volumen CT a segmentar"
     ),
@@ -479,16 +550,17 @@ async def create_segmentation_job_from_nifti(
 
     logger.info(f"Job NIfTI creado: {job_id} | Status: QUEUED | NIfTI: {original_name}")
 
-    # Lanzar tarea en background pasando nifti_path directamente
-    background_tasks.add_task(
-        run_segmentation_job,
-        job_id=job_id,
-        request_data=request_data,
-        dicom_dir=None,
-        nifti_path=str(nifti_dest_path),
-    )
+    # Encolar job NIfTI para procesamiento serial
+    await job_queue.put({
+        "job_id": job_id,
+        "request_data": request_data,
+        "dicom_dir": None,
+        "nifti_path": str(nifti_dest_path),
+    })
 
-    logger.info(f"BackgroundTask NIfTI lanzada para Job: {job_id}")
+    logger.info(
+        f"Job NIfTI encolado: {job_id} | Posición en cola: {job_queue.qsize()}"
+    )
 
     return SegmentationJobResponse(
         job_id=job_id,

@@ -1,9 +1,10 @@
 """
-background_task.py — Orquestador de tareas en segundo plano para PulmoSeg 3D.
+background_task.py — Orquestador de inferencia para PulmoSeg 3D.
 
-Regla 1 aplicada: Sustituye Google Cloud Pub/Sub por BackgroundTasks de FastAPI.
-Esta función se ejecuta en un thread pool separado (no bloquea el event loop)
-cuando FastAPI la invoca mediante BackgroundTasks.add_task().
+Esta función es consumida por el queue_worker de main.py, el cual la invoca
+mediante asyncio.loop.run_in_executor() para ejecutarla en el thread pool
+sin bloquear el event loop. Los jobs son procesados de forma SERIAL (FIFO):
+el siguiente job no comienza hasta que el actual haya terminado.
 
 Flujo del worker:
   1. Resuelve la ruta dinámica al directorio DICOM desde el request payload.
@@ -13,7 +14,7 @@ Flujo del worker:
   5. Actualiza estado a COMPLETED con los resultados.
   6. Si falla, actualiza estado a FAILED con el mensaje de error.
 
-Jerárquica DICOM esperada (LIDC-IDRI):
+Jerarquía DICOM esperada (LIDC-IDRI):
   local_storage/inputs/dicom/{patient_pseudo_id}/{study_instance_uid}/*.dcm
 
 Nota: Los directorios temp_{job_id}/ NO se eliminan al finalizar.

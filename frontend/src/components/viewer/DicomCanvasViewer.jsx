@@ -11,6 +11,10 @@ const WINDOWS = [
 ];
 
 const sliceCache = new Map();
+export function clearViewerCache() {
+  sliceCache.clear();
+}
+
 async function fetchDicom(url) {
   if (sliceCache.has(url)) return sliceCache.get(url);
   const res = await fetch(url, { headers: API_KEY ? { "X-API-Key": API_KEY } : {} });
@@ -392,6 +396,7 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
     let cancelled = false;
     async function load() {
       setStatus("loading"); setProgress(0);
+      setSlices([]); setSegData(null); setSegLoaded(false);
       const urls = dicomImageIds.map(p => `/api${p}`);
       const loaded = [];
       for (let i = 0; i < urls.length; i += 8) {
@@ -648,35 +653,72 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
 
   return (
     <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b"
-        style={{ backgroundColor: "var(--bg-input)", borderColor: "var(--border-subtle)" }}>
-        <div className="flex items-center gap-3">
-          <Layers3 className="w-5 h-5" style={{ color: "var(--text-accent)" }} />
-          <h3 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>Visor CT</h3>
-          {status==="ready" && <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor:"oklch(0.72 0.17 195/0.15)",color:"oklch(0.72 0.17 195)" }}>{n} slices</span>}
-          {segLoaded && (
-            <button onClick={()=>setShowSeg(s=>!s)} className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full transition-all"
-              style={{ backgroundColor:showSeg?"oklch(0.65 0.22 20/0.2)":"var(--bg-card)", color:showSeg?"oklch(0.75 0.22 20)":"var(--text-muted)", border:`1px solid ${showSeg?"oklch(0.65 0.22 20/0.4)":"var(--border-subtle)"}` }}>
-              {showSeg?<Eye className="w-3 h-3"/>:<EyeOff className="w-3 h-3"/>}
-              Segmentación {segArr.length>0 && `(${segArr.length} cortes)`}
-            </button>
+      {/* Toolbar / Header */}
+      <div className="flex flex-wrap items-center justify-between px-5 py-3 border-b shrink-0 z-10 shadow-sm gap-4"
+        style={{ backgroundColor: "var(--bg-sidebar)", borderColor: "var(--border-subtle)" }}>
+        
+        {/* Left: Slices and Navigation */}
+        <div className="flex flex-wrap items-center gap-6">
+          {status==="ready" && (
+            <div className="flex items-center gap-2.5 bg-black/20 px-3 py-1.5 rounded-lg border" style={{ borderColor: "var(--border-subtle)", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.1)" }}>
+              <Layers3 className="w-4 h-4" style={{ color: "var(--text-accent)" }} />
+              <span className="text-sm font-mono font-bold tracking-wide" style={{ color: "var(--text-primary)" }}>
+                {sliceIdx + 1} <span style={{ color: "var(--text-muted)", fontWeight: "normal" }}>/ {n}</span>
+              </span>
+            </div>
           )}
-          {segLoaded && segArr.length > 0 && (
-            <div className="flex items-center gap-1">
-              <button onClick={()=>jumpToSeg(-1)} title="Anterior hallazgo" className="p-1 rounded hover:bg-white/10 transition-colors" style={{ color:"var(--text-muted)" }}><SkipBack className="w-4 h-4"/></button>
-              <span className="text-[10px]" style={{ color:"var(--text-muted)" }}>{hasSegHere?"● hallazgo aquí":""}</span>
-              <button onClick={()=>jumpToSeg(1)} title="Siguiente hallazgo" className="p-1 rounded hover:bg-white/10 transition-colors" style={{ color:"var(--text-muted)" }}><SkipForward className="w-4 h-4"/></button>
+
+          {segLoaded && (
+            <div className="flex items-center bg-black/20 rounded-lg border overflow-hidden" style={{ borderColor: showSeg ? "oklch(0.65 0.22 20/0.4)" : "var(--border-subtle)", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.1)" }}>
+              <button 
+                onClick={()=>setShowSeg(s=>!s)} 
+                className="flex items-center gap-2 px-3 py-1.5 text-xs font-bold tracking-wide transition-colors shrink-0 whitespace-nowrap"
+                style={{ 
+                  backgroundColor: showSeg ? "oklch(0.65 0.22 20/0.15)" : "transparent", 
+                  color: showSeg ? "oklch(0.65 0.22 20)" : "var(--text-muted)" 
+                }}
+              >
+                {showSeg ? <Eye className="w-3.5 h-3.5"/> : <EyeOff className="w-3.5 h-3.5"/>}
+                MÁSCARA IA
+              </button>
+              
+              {segArr.length > 0 && (
+                <div className="flex items-center px-1.5 py-1 gap-1 border-l" style={{ borderColor: "var(--border-subtle)", backgroundColor: "transparent" }}>
+                  <button onClick={()=>jumpToSeg(-1)} title="Anterior hallazgo" className="p-1 rounded hover:bg-white/10 transition-colors" style={{ color:"var(--text-secondary)" }}><SkipBack className="w-3.5 h-3.5"/></button>
+                  <span className="text-[11px] font-mono font-semibold w-16 text-center" style={{ color: hasSegHere ? "oklch(0.65 0.22 20)" : "var(--text-muted)" }}>
+                    {segArr.length} cortes
+                  </span>
+                  <button onClick={()=>jumpToSeg(1)} title="Siguiente hallazgo" className="p-1 rounded hover:bg-white/10 transition-colors" style={{ color:"var(--text-secondary)" }}><SkipForward className="w-3.5 h-3.5"/></button>
+                </div>
+              )}
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          {status==="loading" && <div className="flex items-center gap-2 mr-2"><Loader className="w-4 h-4 animate-spin" style={{ color:"var(--text-accent)" }}/><span className="text-xs" style={{ color:"var(--text-muted)" }}>{progress}%</span></div>}
-          {WINDOWS.map((w,i)=>(
-            <button key={w.label} onClick={()=>applyPreset(i)} className="text-[10px] px-2 py-1 rounded font-medium transition-all"
-              style={{ backgroundColor:i===winIdx?"var(--text-accent)":"var(--bg-card)",color:i===winIdx?"#fff":"var(--text-muted)" }}>{w.label}</button>
-          ))}
-          <div className="w-px h-4" style={{ backgroundColor:"var(--border-subtle)" }}/>
+
+        {/* Right: Presets and Status */}
+        <div className="flex flex-wrap items-center gap-6">
+          {status==="loading" && (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-black/20 rounded-lg border shrink-0" style={{ borderColor: "var(--border-subtle)" }}>
+              <Loader className="w-4 h-4 animate-spin" style={{ color:"var(--text-accent)" }}/>
+              <span className="text-xs font-bold" style={{ color:"var(--text-primary)" }}>{progress}%</span>
+            </div>
+          )}
+          
+          <div className="flex flex-wrap items-center gap-2 bg-black/20 rounded-lg border p-1.5" style={{ borderColor: "var(--border-subtle)", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.1)" }}>
+            {WINDOWS.map((w,i)=>(
+              <button key={w.label} onClick={()=>applyPreset(i)} className="text-[11px] px-4 py-1.5 rounded-md font-bold transition-all uppercase tracking-wider shrink-0 whitespace-nowrap"
+                style={{ 
+                  backgroundColor: i===winIdx ? "var(--bg-elevated)" : "transparent",
+                  color: i===winIdx ? "var(--text-primary)" : "var(--text-muted)",
+                  boxShadow: i===winIdx ? "0 1px 3px rgba(0,0,0,0.2)" : "none"
+                }}
+              >
+                {w.label}
+              </button>
+            ))}
+          </div>
+          
+          <div className="w-px h-5" style={{ backgroundColor:"var(--border-subtle)" }}/>
           <button onClick={()=>setZoom(z=>Math.min(8,z+0.25))} className="p-1 rounded hover:bg-white/10" style={{ color:"var(--text-muted)" }}><ZoomIn className="w-4 h-4"/></button>
           <button onClick={()=>setZoom(z=>Math.max(0.25,z-0.25))} className="p-1 rounded hover:bg-white/10" style={{ color:"var(--text-muted)" }}><ZoomOut className="w-4 h-4"/></button>
         </div>
