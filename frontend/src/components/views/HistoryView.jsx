@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import {
-  FileText, Search, Eye, Download, Loader, AlertTriangle,
+  FileText, Search, AlertTriangle,
   RefreshCw, ChevronFirst, ChevronLast, ChevronLeft, ChevronRight,
+  Copy, Check, ClipboardList
 } from "lucide-react";
 import { listJobs } from "@/api/client";
 
@@ -10,12 +11,31 @@ import { listJobs } from "@/api/client";
 // Constantes
 // ---------------------------------------------------------------------------
 const STATUS_STYLES = {
-  COMPLETED:  { label: "Completado",  color: "oklch(0.72 0.19 155)", bg: "oklch(0.72 0.19 155 / 0.1)" },
-  FAILED:     { label: "Error",       color: "oklch(0.65 0.20 20)",  bg: "oklch(0.65 0.20 20 / 0.1)"  },
-  PROCESSING: { label: "Procesando",  color: "oklch(0.72 0.17 195)", bg: "oklch(0.72 0.17 195 / 0.1)" },
-  QUEUED:     { label: "En Cola",     color: "oklch(0.80 0.16 80)",  bg: "oklch(0.80 0.16 80 / 0.1)"  },
-  CANCELLED:  { label: "Cancelado",   color: "oklch(0.55 0.05 260)", bg: "oklch(0.55 0.05 260 / 0.1)" },
+  COMPLETED:  { label: "Completado",  color: "var(--text-secondary)", dot: "oklch(0.72 0.19 155)", bg: "transparent" },
+  FAILED:     { label: "Error",       color: "oklch(0.65 0.20 20)",   dot: "oklch(0.65 0.20 20)", bg: "oklch(0.65 0.20 20 / 0.1)"  },
+  PROCESSING: { label: "Procesando",  color: "var(--text-secondary)", dot: "oklch(0.72 0.17 195)", bg: "transparent" },
+  QUEUED:     { label: "En Cola",     color: "var(--text-secondary)", dot: "oklch(0.80 0.16 80)", bg: "transparent"  },
+  CANCELLED:  { label: "Cancelado",   color: "var(--text-muted)",     dot: "oklch(0.55 0.05 260)", bg: "transparent" },
 };
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function fmtDate(iso) {
+  if (!iso) return "—";
+  const d = iso.endsWith("Z") ? iso : iso + "Z";
+  return new Date(d).toLocaleDateString("es-CL", {
+    year: "numeric", month: "short", day: "numeric",
+  });
+}
+
+function fmtTime(iso) {
+  if (!iso) return "";
+  const d = iso.endsWith("Z") ? iso : iso + "Z";
+  return new Date(d).toLocaleTimeString("es-CL", {
+    hour: "2-digit", minute: "2-digit",
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Debounce hook
@@ -30,12 +50,35 @@ function useDebounce(value, delay = 400) {
 }
 
 // ---------------------------------------------------------------------------
-// Paginador — renderiza los botones de páginas con ventana deslizante
+// Componente Botón de Copiar
+// ---------------------------------------------------------------------------
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = (e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="p-1 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-all active:scale-95"
+      title="Copiar ID completo"
+    >
+      {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Paginador
 // ---------------------------------------------------------------------------
 function Paginator({ page, totalPages, onPage }) {
   if (totalPages <= 1) return null;
 
-  // Ventana: siempre muestra hasta 5 páginas alrededor de la actual
   const delta = 2;
   const range = [];
   const rangeWithDots = [];
@@ -44,91 +87,30 @@ function Paginator({ page, totalPages, onPage }) {
     range.push(i);
   }
 
-  // Primera página
   rangeWithDots.push(1);
-
   if (range[0] > 2) rangeWithDots.push("…");
   range.forEach((p) => rangeWithDots.push(p));
   if (range[range.length - 1] < totalPages - 1) rangeWithDots.push("…");
-
   if (totalPages > 1) rangeWithDots.push(totalPages);
 
-  const btnBase = [
-    "flex items-center justify-center min-w-[2rem] h-8 px-1.5 rounded text-xs font-medium",
-    "border transition-all duration-150 cursor-pointer select-none",
-  ].join(" ");
-
+  const btnBase = "flex items-center justify-center min-w-[2rem] h-8 px-1.5 rounded text-xs font-medium border transition-all duration-150 cursor-pointer select-none";
   const btnActive = { backgroundColor: "#22d3ee", borderColor: "#22d3ee", color: "oklch(0.13 0.01 260)" };
   const btnNormal = { borderColor: "var(--border-subtle)", color: "var(--text-secondary)", backgroundColor: "var(--bg-input)" };
   const btnDisabled = { borderColor: "var(--border-subtle)", color: "var(--text-muted)", backgroundColor: "transparent", opacity: 0.4, cursor: "not-allowed" };
 
   return (
-    <div className="flex items-center gap-1">
-      {/* << First */}
-      <button
-        className={btnBase}
-        style={page === 1 ? btnDisabled : btnNormal}
-        disabled={page === 1}
-        onClick={() => onPage(1)}
-        title="Primera página"
-      >
-        <ChevronFirst className="w-3.5 h-3.5" />
-      </button>
-
-      {/* < Prev */}
-      <button
-        className={btnBase}
-        style={page === 1 ? btnDisabled : btnNormal}
-        disabled={page === 1}
-        onClick={() => onPage(page - 1)}
-        title="Página anterior"
-      >
-        <ChevronLeft className="w-3.5 h-3.5" />
-      </button>
-
-      {/* Page numbers */}
+    <div className="flex items-center gap-1 flex-wrap justify-end">
+      <button className={btnBase} style={page === 1 ? btnDisabled : btnNormal} disabled={page === 1} onClick={() => onPage(1)} title="Primera página"><ChevronFirst className="w-3.5 h-3.5" /></button>
+      <button className={btnBase} style={page === 1 ? btnDisabled : btnNormal} disabled={page === 1} onClick={() => onPage(page - 1)} title="Página anterior"><ChevronLeft className="w-3.5 h-3.5" /></button>
       {rangeWithDots.map((p, i) =>
         p === "…" ? (
-          <span
-            key={`dots-${i}`}
-            className="flex items-center justify-center w-8 h-8 text-xs select-none"
-            style={{ color: "var(--text-muted)" }}
-          >
-            ···
-          </span>
+          <span key={`dots-${i}`} className="flex items-center justify-center w-8 h-8 text-xs select-none" style={{ color: "var(--text-muted)" }}>···</span>
         ) : (
-          <button
-            key={p}
-            className={btnBase}
-            style={p === page ? btnActive : btnNormal}
-            onClick={() => onPage(p)}
-          >
-            {p}
-          </button>
+          <button key={p} className={btnBase} style={p === page ? btnActive : btnNormal} onClick={() => onPage(p)}>{p}</button>
         )
       )}
-
-      {/* > Next */}
-      <button
-        className={btnBase}
-        style={page === totalPages ? btnDisabled : btnNormal}
-        disabled={page === totalPages}
-        onClick={() => onPage(page + 1)}
-        title="Página siguiente"
-      >
-        <ChevronRight className="w-3.5 h-3.5" />
-      </button>
-
-      {/* >> Last */}
-      <button
-        className={btnBase}
-        style={page === totalPages ? btnDisabled : btnNormal}
-        disabled={page === totalPages}
-        onClick={() => onPage(totalPages)}
-        title="Última página"
-      >
-        <ChevronLast className="w-3.5 h-3.5" />
-      </button>
+      <button className={btnBase} style={page === totalPages ? btnDisabled : btnNormal} disabled={page === totalPages} onClick={() => onPage(page + 1)} title="Página siguiente"><ChevronRight className="w-3.5 h-3.5" /></button>
+      <button className={btnBase} style={page === totalPages ? btnDisabled : btnNormal} disabled={page === totalPages} onClick={() => onPage(totalPages)} title="Última página"><ChevronLast className="w-3.5 h-3.5" /></button>
     </div>
   );
 }
@@ -136,15 +118,6 @@ function Paginator({ page, totalPages, onPage }) {
 // ---------------------------------------------------------------------------
 // Componente principal
 // ---------------------------------------------------------------------------
-/**
- * HistoryView — Historial paginado de estudios de segmentación.
- *
- * Paginación server-side real usando skip/limit del endpoint GET /jobs.
- * Soporta búsqueda debounced por patient_pseudo_id.
- *
- * @param {object}   props
- * @param {function} props.onViewJob - Callback(jobId) al pulsar "Ver Detalle"
- */
 export default function HistoryView({ onViewJob }) {
   const [jobs,     setJobs]     = useState([]);
   const [total,    setTotal]    = useState(0);
@@ -152,7 +125,7 @@ export default function HistoryView({ onViewJob }) {
   const [error,    setError]    = useState(null);
   const [search,   setSearch]   = useState("");
   const [page,     setPage]     = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(10); 
 
   const debouncedSearch = useDebounce(search, 400);
   const searchRef = useRef(null);
@@ -175,161 +148,115 @@ export default function HistoryView({ onViewJob }) {
     }
   }, []);
 
-  // Re-fetch cuando cambia búsqueda (reset a pág 1) o página/pageSize
   useEffect(() => {
     fetchJobs(debouncedSearch, page, pageSize);
   }, [debouncedSearch, page, pageSize, fetchJobs]);
 
-  // Al cambiar búsqueda volvemos a página 1
   useEffect(() => {
     setPage(1);
   }, [debouncedSearch]);
 
-  // ── Helpers de formato ───────────────────────────────────────────────────
-  function fmtDate(iso) {
-    if (!iso) return "—";
-    const d = iso.endsWith("Z") ? iso : iso + "Z";
-    return new Date(d).toLocaleDateString("es-CL", {
-      year: "numeric", month: "short", day: "numeric",
-    });
-  }
-  function fmtTime(iso) {
-    if (!iso) return "";
-    const d = iso.endsWith("Z") ? iso : iso + "Z";
-    return new Date(d).toLocaleTimeString("es-CL", {
-      hour: "2-digit", minute: "2-digit",
-    });
-  }
-
-  // Primeros 8 chars del UUID + indicador del segmento #2 para legibilidad
-  // Ejemplo: "33fec9de" → muestra "33fec9de" con tooltip del UUID completo
-  function shortId(jobId) {
-    if (!jobId) return "—";
-    const parts = jobId.split("-");
-    // Muestra los primeros dos segmentos: "33fec9de-1a2b" para más contexto
-    return parts.slice(0, 2).join("-");
-  }
-
-  // ── Rango de filas mostradas ─────────────────────────────────────────────
   const firstRow = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const lastRow  = Math.min(page * pageSize, total);
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <div className="max-w-7xl mx-auto px-8 space-y-5 animate-[fade-in_0.4s_ease-out]">
-
-      {/* ── Header ─────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div
-            className="w-10 h-10 rounded-xl flex items-center justify-center"
-            style={{ backgroundColor: "oklch(0.72 0.17 195 / 0.1)" }}
-          >
-            <FileText className="w-5 h-5" style={{ color: "var(--text-accent)" }} />
+    <div className="max-w-[1200px] mx-auto px-6 animate-[fade-in_0.4s_ease-out] pb-16 pt-8 flex flex-col gap-10 w-full min-w-0">
+      
+      {/* ── Encabezado y Buscador ── */}
+      <div 
+        className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 glass-card px-8 py-6 shadow-sm border rounded-2xl w-full" 
+        style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-card)" }}
+      >
+        <div className="flex items-center gap-4">
+          <div className="p-3 rounded-xl" style={{ backgroundColor: "oklch(0.72 0.17 195 / 0.1)" }}>
+            <ClipboardList className="w-7 h-7" style={{ color: "var(--text-accent)" }} />
           </div>
           <div>
-            <h3 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
-              Registros de Segmentación
-            </h3>
-            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-              {loading
-                ? "Cargando registros..."
-                : `${total} estudio${total !== 1 ? "s" : ""} registrado${total !== 1 ? "s" : ""}`}
+            <h2 className="text-xl font-bold tracking-tight" style={{ color: "var(--text-primary)" }}>
+              Buscador de Estudios
+            </h2>
+            <p className="text-sm mt-0.5" style={{ color: "var(--text-muted)" }}>
+              Búsqueda e historial de pacientes
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* Refrescar */}
-          <button
-            id="history-refresh-btn"
-            onClick={() => fetchJobs(debouncedSearch, page, pageSize)}
-            disabled={loading}
-            className="p-2 rounded-lg border transition-colors hover:bg-[var(--bg-card-hover)] disabled:opacity-40"
-            style={{ borderColor: "var(--border-subtle)", color: "var(--text-muted)" }}
-            title="Refrescar historial"
-          >
-            <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
-          </button>
-
-          {/* Buscador */}
-          <div
-            className="flex items-center gap-2 px-3 py-2 rounded-lg border"
+        <div className="flex items-center gap-3 w-full lg:w-[480px]">
+          <div 
+            className="flex-1 flex items-center gap-3 px-5 py-3 rounded-xl border transition-all focus-within:border-[var(--text-accent)] focus-within:shadow-[0_0_15px_rgba(34,211,238,0.15)]" 
             style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-input)" }}
           >
-            <Search className="w-4 h-4 shrink-0" style={{ color: "var(--text-muted)" }} />
+            <Search className="w-5 h-5 shrink-0" style={{ color: "var(--text-muted)" }} />
             <input
-              id="history-search-input"
-              ref={searchRef}
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Buscar por paciente o ID..."
-              className="bg-transparent text-sm outline-none w-52"
+              placeholder="Buscar por ID o paciente..."
+              className="bg-transparent text-[15px] outline-none w-full font-medium placeholder:font-normal"
               style={{ color: "var(--text-primary)" }}
             />
             {search && (
-              <button
-                onClick={() => setSearch("")}
-                className="text-xs opacity-50 hover:opacity-100 transition-opacity"
-                style={{ color: "var(--text-muted)" }}
-              >
-                ✕
-              </button>
+              <button onClick={() => setSearch("")} className="opacity-50 hover:opacity-100 transition-opacity p-1">✕</button>
             )}
           </div>
+          <button
+            onClick={() => fetchJobs(debouncedSearch, page, pageSize)}
+            disabled={loading}
+            className="p-3 rounded-xl border transition-colors hover:bg-[var(--bg-card-hover)] shrink-0"
+            style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-input)" }}
+            title="Sincronizar datos"
+          >
+            <RefreshCw className={cn("w-5 h-5", loading && "animate-spin")} style={{ color: "var(--text-muted)" }} />
+          </button>
         </div>
       </div>
 
       {/* ── Error ──────────────────────────────────────────────────────── */}
       {error && (
         <div
-          className="glass-card p-4 flex items-start gap-3 animate-[fade-in_0.3s_ease-out]"
+          className="glass-card p-5 flex items-start gap-4 animate-[fade-in_0.3s_ease-out]"
           style={{ borderColor: "oklch(0.65 0.20 20 / 0.4)", backgroundColor: "oklch(0.65 0.20 20 / 0.06)" }}
         >
-          <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" style={{ color: "oklch(0.65 0.20 20)" }} />
+          <AlertTriangle className="w-6 h-6 shrink-0 mt-0.5" style={{ color: "oklch(0.65 0.20 20)" }} />
           <div>
-            <p className="text-sm font-semibold" style={{ color: "oklch(0.65 0.20 20)" }}>
-              Error al cargar el historial
+            <p className="text-base font-bold" style={{ color: "oklch(0.65 0.20 20)" }}>
+              Error de conexión
             </p>
-            <p className="text-xs mt-1 font-mono" style={{ color: "var(--text-muted)" }}>{error}</p>
+            <p className="text-sm mt-1 font-mono" style={{ color: "var(--text-muted)" }}>{error}</p>
           </div>
         </div>
       )}
 
-      {/* ── Tabla ──────────────────────────────────────────────────────── */}
-      <div className="glass-card overflow-hidden" style={{ padding: 0 }}>
-
-        <div className="overflow-x-auto">
-          <table className="w-full">
+      {/* ── Tabla Clínica (Minimalista) ──────────────────────────────────────────────────────── */}
+      <div 
+        className="glass-card shadow-sm border rounded-2xl w-full overflow-hidden" 
+        style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-card)" }}
+      >
+        {/* Contenedor responsivo con scroll horizontal para monitores pequeños o pantallas divididas */}
+        <div className="w-full overflow-x-auto">
+          <table className="w-full text-left border-collapse table-fixed min-w-[1100px]">
             <thead>
-              <tr
-                className="border-b"
-                style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-input)" }}
-              >
-                {["ID Estudio", "Paciente", "Archivos", "Fecha", "Estado", "Volumen (mL)", "Diámetro (mm)", "Visualizar"].map((h, idx) => (
-                  <th
-                    key={h}
-                    className={cn(
-                      "py-3.5 text-left text-xs font-semibold uppercase tracking-wider",
-                      idx === 0 ? "pl-10 pr-5" : "px-5"
-                    )}
-                    style={{ color: "var(--text-secondary)" }}
-                  >
-                    {h}
-                  </th>
-                ))}
+              <tr className="border-b" style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-input)" }}>
+                <th className="py-5 pr-4 text-xs font-semibold uppercase text-left" style={{ color: "var(--text-muted)", width: "16%", paddingLeft: "2rem" }}>Paciente</th>
+                <th className="py-5 px-4 text-xs font-semibold uppercase text-left" style={{ color: "var(--text-muted)", width: "12%" }}>ID Estudio</th>
+                <th className="py-5 px-4 text-xs font-semibold uppercase text-left" style={{ color: "var(--text-muted)", width: "14%" }}>Fecha</th>
+                <th className="py-5 px-4 text-xs font-semibold uppercase text-center" style={{ color: "var(--text-muted)", width: "10%" }}>Imágenes</th>
+                <th className="py-5 px-4 text-xs font-semibold uppercase text-right" style={{ color: "var(--text-muted)", width: "11%" }}>Volumen</th>
+                <th className="py-5 px-4 text-xs font-semibold uppercase text-right" style={{ color: "var(--text-muted)", width: "12%" }}>Diámetro</th>
+                <th className="py-5 px-4 text-xs font-semibold uppercase text-center" style={{ color: "var(--text-muted)", width: "13%" }}>Estado</th>
+                <th className="py-5 pl-4 text-xs font-semibold uppercase text-center" style={{ color: "var(--text-muted)", width: "12%", paddingRight: "2rem" }}>Acción</th>
               </tr>
             </thead>
+            
             <tbody>
-
               {/* Cargando */}
               {loading && (
                 <tr>
-                  <td colSpan={8} className="px-5 py-12 text-center">
+                  <td colSpan={8} className="py-16 text-center">
                     <div className="flex flex-col items-center gap-3">
-                      <Loader className="w-6 h-6 animate-spin" style={{ color: "var(--text-accent)" }} />
-                      <span className="text-sm" style={{ color: "var(--text-muted)" }}>
+                      <RefreshCw className="w-8 h-8 animate-spin" style={{ color: "var(--text-accent)" }} />
+                      <span className="text-sm font-medium" style={{ color: "var(--text-muted)" }}>
                         Cargando registros...
                       </span>
                     </div>
@@ -340,13 +267,13 @@ export default function HistoryView({ onViewJob }) {
               {/* Sin resultados */}
               {!loading && !error && jobs.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-5 py-12 text-center">
-                    <div className="flex flex-col items-center gap-2">
-                      <FileText className="w-8 h-8 opacity-20" style={{ color: "var(--text-muted)" }} />
-                      <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-                        {search
-                          ? `No se encontraron estudios para "${search}"`
-                          : "No hay estudios registrados aún."}
+                  <td colSpan={8} className="py-20 text-center">
+                    <div className="flex flex-col items-center gap-4">
+                      <div className="p-4 rounded-full" style={{ backgroundColor: "var(--bg-input)" }}>
+                        <FileText className="w-10 h-10 opacity-30" style={{ color: "var(--text-muted)" }} />
+                      </div>
+                      <p className="text-lg font-bold" style={{ color: "var(--text-primary)" }}>
+                        {search ? `No hay resultados para "${search}"` : "La base de datos está vacía."}
                       </p>
                     </div>
                   </td>
@@ -354,126 +281,95 @@ export default function HistoryView({ onViewJob }) {
               )}
 
               {/* Filas */}
-              {!loading && jobs.map((row, i) => {
+              {!loading && jobs.map((row) => {
                 const st = STATUS_STYLES[row.status] ?? STATUS_STYLES.FAILED;
                 const isCompleted = row.status === "COMPLETED";
-                const sid = shortId(row.job_id);
 
                 return (
                   <tr
                     key={row.job_id}
-                    className={cn(
-                      "border-b transition-colors duration-150",
-                      "hover:bg-[var(--bg-card-hover)]",
-                      "animate-[fade-in_0.25s_ease-out]"
-                    )}
-                    style={{
-                      borderColor: "var(--border-subtle)",
-                      animationDelay: `${i * 30}ms`,
-                      animationFillMode: "both",
-                    }}
+                    className="border-b transition-colors duration-150 hover:bg-[var(--bg-card-hover)]"
+                    style={{ borderColor: "var(--border-subtle)" }}
                   >
-                    {/* ── ID Estudio ── */}
-                    <td className="pl-10 pr-5 py-3.5">
-                      <div
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg"
-                        style={{
-                          backgroundColor: "var(--bg-card)",
-                          border: "1px solid var(--border-subtle)",
-                        }}
-                        title={`UUID completo: ${row.job_id}`}
-                      >
-                        {/* Punto de color indicador */}
-                        <span
-                          className="w-1.5 h-1.5 rounded-full shrink-0"
-                          style={{ backgroundColor: st.color }}
-                        />
-                        <span
-                          className="text-xs font-mono font-semibold tracking-tight"
-                          style={{ color: "var(--text-primary)" }}
-                        >
-                          {sid}
-                        </span>
-                      </div>
-                    </td>
-
-                    {/* ── Paciente ── */}
-                    <td className="px-5 py-3.5">
-                      <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
+                    {/* Paciente */}
+                    <td className="py-4 pr-4 align-middle text-left" style={{ paddingLeft: "2rem" }}>
+                      <span className="text-[15px] font-bold" style={{ color: "var(--text-primary)" }}>
                         {row.patient_pseudo_id ?? <span style={{ color: "var(--text-muted)" }}>—</span>}
                       </span>
                     </td>
 
-                    {/* ── Archivos ── */}
-                    <td className="px-5 py-3.5">
-                      <span className="text-sm font-mono" style={{ color: "var(--text-secondary)" }}>
-                        {row.file_count != null ? `${row.file_count} dcm` : "—"}
+                    {/* ID Estudio */}
+                    <td className="px-4 py-4 align-middle text-left">
+                      <div className="flex items-center gap-2">
+                        <span 
+                          className="font-mono text-[13px] font-medium" 
+                          style={{ color: "var(--text-secondary)" }}
+                          title={row.job_id}
+                        >
+                          {row.job_id.split('-')[0]}
+                        </span>
+                        <CopyButton text={row.job_id} />
+                      </div>
+                    </td>
+
+                    {/* Fecha */}
+                    <td className="px-4 py-4 align-middle text-left">
+                      <div className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{fmtDate(row.created_at)}</div>
+                      <div className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>{fmtTime(row.created_at)}</div>
+                    </td>
+
+                    {/* Imágenes */}
+                    <td className="px-4 py-4 align-middle text-center">
+                      <span className="text-[14px] font-mono font-medium inline-block w-full text-center" style={{ color: "var(--text-primary)" }}>
+                        {row.file_count != null ? row.file_count : "—"}
                       </span>
                     </td>
 
-                    {/* ── Fecha ── */}
-                    <td className="px-5 py-3.5">
-                      <span className="text-sm" style={{ color: "var(--text-secondary)" }}>
-                        {fmtDate(row.created_at)}
-                      </span>
-                      <br />
-                      <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                        {fmtTime(row.created_at)}
-                      </span>
+                    {/* Volumen */}
+                    <td className="px-4 py-4 align-middle text-right">
+                      {row.volume_ml != null
+                        ? <span className="text-[14px] font-mono font-medium inline-block w-full text-right" style={{ color: "var(--text-primary)" }}>
+                            {row.volume_ml.toFixed(1)} <span className="text-[10px] font-sans text-[var(--text-muted)]">mL</span>
+                          </span>
+                        : <span className="text-sm text-right block w-full" style={{ color: "var(--text-muted)" }}>—</span>}
                     </td>
 
-                    {/* ── Estado ── */}
-                    <td className="px-5 py-3.5">
+                    {/* Diámetro */}
+                    <td className="px-4 py-4 align-middle text-right">
+                      {row.longest_diameter_mm != null
+                        ? <span className="text-[14px] font-mono font-medium inline-block w-full text-right" style={{ color: "var(--text-primary)" }}>
+                            {row.longest_diameter_mm.toFixed(1)} <span className="text-[10px] font-sans text-[var(--text-muted)]">mm</span>
+                          </span>
+                        : <span className="text-sm text-right block w-full" style={{ color: "var(--text-muted)" }}>—</span>}
+                    </td>
+
+                    {/* Estado */}
+                    <td className="px-4 py-4 align-middle text-center">
                       <span
-                        className="inline-flex px-2.5 py-1 rounded-full text-xs font-semibold"
+                        className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-semibold mx-auto"
                         style={{ backgroundColor: st.bg, color: st.color }}
                       >
+                        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: st.dot }} />
                         {st.label}
                       </span>
                     </td>
 
-                    {/* ── Volumen ── */}
-                    <td className="px-5 py-3.5">
-                      {row.volume_ml != null
-                        ? <span className="text-sm font-mono font-medium" style={{ color: "var(--text-primary)" }}>
-                            {row.volume_ml.toFixed(2)}
-                          </span>
-                        : <span className="text-sm" style={{ color: "var(--text-muted)" }}>—</span>}
-                    </td>
-
-                    {/* ── Diámetro ── */}
-                    <td className="px-5 py-3.5">
-                      {row.longest_diameter_mm != null
-                        ? <span className="text-sm font-mono font-medium" style={{ color: "var(--text-primary)" }}>
-                            {row.longest_diameter_mm.toFixed(1)}
-                          </span>
-                        : <span className="text-sm" style={{ color: "var(--text-muted)" }}>—</span>}
-                    </td>
-
-                    {/* ── Acciones ── */}
-                    <td className="px-5 py-3.5">
-                      <div className="flex items-center gap-2">
-                        <button
-                          id={`history-view-${row.job_id}`}
-                          className={cn(
-                            "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all",
-                            isCompleted
-                              ? "cursor-pointer hover:border-[var(--border-accent)]"
-                              : "opacity-40 cursor-not-allowed"
-                          )}
-                          style={{
-                            borderColor: "var(--border-subtle)",
-                            color: "var(--text-accent)",
-                            backgroundColor: "var(--bg-input)",
-                          }}
-                          disabled={!isCompleted}
-                          onClick={() => isCompleted && onViewJob?.(row.job_id)}
-                          title={isCompleted ? "Cargar en el visor" : "Solo para estudios completados"}
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          Ver Detalle
-                        </button>
-                      </div>
+                    {/* Acción */}
+                    <td className="py-4 pl-4 align-middle text-center" style={{ paddingRight: "2rem" }}>
+                      <button
+                        className={cn(
+                          "inline-flex items-center justify-center gap-1 text-[13px] font-bold transition-all mx-auto outline-none w-full",
+                          isCompleted
+                            ? "hover:brightness-125"
+                            : "opacity-40 cursor-not-allowed"
+                        )}
+                        style={isCompleted ? { color: "var(--text-accent)" } : { color: "var(--text-muted)" }}
+                        disabled={!isCompleted}
+                        onClick={() => isCompleted && onViewJob?.(row.job_id)}
+                      >
+                        <span className="text-center">Ver Resultados</span>
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
                     </td>
                   </tr>
                 );
@@ -482,23 +378,18 @@ export default function HistoryView({ onViewJob }) {
           </table>
         </div>
 
-        {/* ── Footer con paginador ──────────────────────────────────────── */}
-        <div
-          className="flex items-center justify-between px-5 py-3 border-t"
-          style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-input)" }}
-        >
-          {/* Info total + páginas */}
-          <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-            {loading
-              ? "Cargando..."
-              : total === 0
-              ? "Sin registros"
-              : `Mostrando ${firstRow}–${lastRow} de ${total} registros`}
-          </span>
-
-          {/* Botones de paginación */}
-          <Paginator page={page} totalPages={totalPages} onPage={setPage} />
-        </div>
+        {/* ── Footer de la Tabla (Paginador) ──────────────────────────────────────── */}
+        {!loading && total > 0 && (
+          <div
+            className="flex flex-col sm:flex-row items-center justify-between py-5 border-t bg-[var(--bg-card)]"
+            style={{ borderColor: "var(--border-subtle)", paddingLeft: "2rem", paddingRight: "2rem" }}
+          >
+            <span className="text-sm font-medium mb-4 sm:mb-0" style={{ color: "var(--text-muted)" }}>
+              Mostrando <span className="font-bold" style={{ color: "var(--text-primary)" }}>{firstRow}</span> a <span className="font-bold" style={{ color: "var(--text-primary)" }}>{lastRow}</span> de <span className="font-bold" style={{ color: "var(--text-primary)" }}>{total}</span>
+            </span>
+            <Paginator page={page} totalPages={totalPages} onPage={setPage} />
+          </div>
+        )}
       </div>
     </div>
   );
