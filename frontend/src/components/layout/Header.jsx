@@ -1,6 +1,6 @@
 import { useApiHealth } from "@/hooks/useApiHealth";
 import { cn } from "@/lib/utils";
-import { Sun, Moon, Wifi, WifiOff, User } from "lucide-react";
+import { Sun, Moon, Wifi, WifiOff, User, X } from "lucide-react";
 
 /**
  * Header — Top bar with page title, API status indicator, and theme toggle.
@@ -11,7 +11,7 @@ import { Sun, Moon, Wifi, WifiOff, User } from "lucide-react";
  * @param {string} props.theme         - Current theme ("dark" | "light")
  * @param {function} props.onToggleTheme - Callback to toggle theme
  */
-export default function Header({ title, subtitle, theme, onToggleTheme }) {
+export default function Header({ title, subtitle, theme, onToggleTheme, onCloseStudy }) {
   const { isConnected, isChecking } = useApiHealth(10000);
 
   return (
@@ -39,6 +39,23 @@ export default function Header({ title, subtitle, theme, onToggleTheme }) {
 
       {/* --- Right: Controls --- */}
       <div className="flex items-center gap-4">
+        {/* Close Study Button */}
+        {onCloseStudy && (
+          <button
+            onClick={onCloseStudy}
+            className={cn(
+              "group flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold",
+              "border border-[var(--border-subtle)] bg-[var(--bg-card)] text-[var(--text-secondary)]",
+              "transition-all duration-200 cursor-pointer shadow-sm",
+              "hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400 active:scale-95"
+            )}
+            title="Cerrar estudio actual"
+          >
+            <X className="w-3.5 h-3.5 transition-transform group-hover:rotate-90" />
+            <span>Cerrar Estudio</span>
+          </button>
+        )}
+
         {/* API Status Indicator */}
         <div
           id="api-status-indicator"

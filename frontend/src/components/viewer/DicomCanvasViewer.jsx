@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import dicomParser from "dicom-parser";
-import { Layers3, AlertTriangle, Loader, Eye, EyeOff, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, SkipForward, SkipBack } from "lucide-react";
+import { Layers3, AlertTriangle, Loader, Eye, EyeOff, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, SkipForward, SkipBack, LocateFixed } from "lucide-react";
 import { API_KEY } from "@/api/client";
 
 const WINDOWS = [
@@ -514,23 +514,63 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
     sagittalTransform.current = t;
   }, [status, slices, sagittalX, sliceIdx, wc, ww, showSeg, segLoaded, segData, spacingScale, coronalY]);
 
-  // Resize observer
+  // Resize observer with debounce and proper cleanup
   useEffect(() => {
-    [{ ref: axialRef, render: () => {
-      if (status==="ready"&&slices.length) renderAxial(axialRef.current, slices[sliceIdx], wc, ww, zoom, pan, getSegSlice(), showSeg&&segLoaded);
-    }},{ ref: coronalRef, render: () => {
-      if (status==="ready"&&slices.length) { const t=renderCoronal(coronalRef.current, slices, coronalY, wc, ww, showSeg&&segLoaded?segData:null, showSeg&&segLoaded, sliceIdx, spacingScale, sagittalX); coronalTransform.current=t; }
-    }},{ ref: sagittalRef, render: () => {
-      if (status==="ready"&&slices.length) { const t=renderSagittal(sagittalRef.current, slices, sagittalX, wc, ww, showSeg&&segLoaded?segData:null, showSeg&&segLoaded, sliceIdx, spacingScale, coronalY); sagittalTransform.current=t; }
-    }}].forEach(({ ref, render }) => {
-      if (!ref.current?.parentElement) return;
+    const observers = [
+      { ref: axialRef, render: () => {
+        if (status==="ready"&&slices.length) {
+          const t = renderAxial(axialRef.current, slices[sliceIdx], wc, ww, zoom, pan, getSegSlice(), showSeg&&segLoaded);
+          axialTransform.current = t;
+          drawAxialCrosshairs(axialRef.current, t, coronalY, sagittalX);
+        }
+      }},
+      { ref: coronalRef, render: () => {
+        if (status==="ready"&&slices.length) { const t=renderCoronal(coronalRef.current, slices, coronalY, wc, ww, showSeg&&segLoaded?segData:null, showSeg&&segLoaded, sliceIdx, spacingScale, sagittalX); coronalTransform.current=t; }
+      }},
+      { ref: sagittalRef, render: () => {
+        if (status==="ready"&&slices.length) { const t=renderSagittal(sagittalRef.current, slices, sagittalX, wc, ww, showSeg&&segLoaded?segData:null, showSeg&&segLoaded, sliceIdx, spacingScale, coronalY); sagittalTransform.current=t; }
+      }}
+    ].map(({ ref, render }) => {
+      if (!ref.current?.parentElement) return null;
+      let timeoutId;
+      let isFirst = true;
       const obs = new ResizeObserver(([e]) => {
-        if (ref.current) { ref.current.width=e.contentRect.width; ref.current.height=e.contentRect.height; render(); }
+        if (ref.current) {
+          const w = e.contentRect.width;
+          const h = e.contentRect.height;
+          
+          if (isFirst || ref.current.width === 0 || ref.current.width === 300) {
+            // Primera ejecución: actualizar resolución y renderizar inmediatamente para evitar distorsión inicial
+            isFirst = false;
+            ref.current.width = w;
+            ref.current.height = h;
+            render();
+          } else {
+            // Resize posteriores: debounce para evitar congelamiento de UI
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => {
+              if (ref.current) {
+                ref.current.width = w;
+                ref.current.height = h;
+                render();
+              }
+            }, 100);
+          }
+        }
       });
       obs.observe(ref.current.parentElement);
-      return () => obs.disconnect();
+      return { obs, cleanup: () => clearTimeout(timeoutId) };
     });
-  }, [status, sliceIdx, slices, wc, ww, zoom, pan, showSeg, segLoaded, segData, coronalY, sagittalX, getSegSlice]);
+
+    return () => {
+      observers.forEach(item => {
+        if (item) {
+          item.cleanup();
+          item.obs.disconnect();
+        }
+      });
+    };
+  }, [status, sliceIdx, slices, wc, ww, zoom, pan, showSeg, segLoaded, segData, coronalY, sagittalX, getSegSlice, spacingScale]);
 
   function applyPreset(i) { setWinIdx(i); setWc(WINDOWS[i].wc); setWw(WINDOWS[i].ww); }
   function jumpToSeg(dir) {
@@ -659,36 +699,43 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
         
         {/* Left: Slices and Navigation */}
         <div className="flex flex-wrap items-center gap-6">
+          {/* Main Slice Counter */}
           {status==="ready" && (
             <div className="flex items-center gap-2.5 bg-black/20 px-3 py-1.5 rounded-lg border" style={{ borderColor: "var(--border-subtle)", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.1)" }}>
               <Layers3 className="w-4 h-4" style={{ color: "var(--text-accent)" }} />
               <span className="text-sm font-mono font-bold tracking-wide" style={{ color: "var(--text-primary)" }}>
-                {sliceIdx + 1} <span style={{ color: "var(--text-muted)", fontWeight: "normal" }}>/ {n}</span>
+                {n} cortes
               </span>
             </div>
           )}
 
           {segLoaded && (
-            <div className="flex items-center bg-black/20 rounded-lg border overflow-hidden" style={{ borderColor: showSeg ? "oklch(0.65 0.22 20/0.4)" : "var(--border-subtle)", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.1)" }}>
-              <button 
-                onClick={()=>setShowSeg(s=>!s)} 
-                className="flex items-center gap-2 px-3 py-1.5 text-xs font-bold tracking-wide transition-colors shrink-0 whitespace-nowrap"
-                style={{ 
-                  backgroundColor: showSeg ? "oklch(0.65 0.22 20/0.15)" : "transparent", 
-                  color: showSeg ? "oklch(0.65 0.22 20)" : "var(--text-muted)" 
+            <div className="flex items-center gap-3">
+              {/* Toggle Segmentación IA */}
+              <button
+                onClick={() => setShowSeg(s => !s)}
+                className="flex items-center gap-2.5 px-4 py-2 rounded-xl border-2 text-xs font-bold tracking-wide transition-all whitespace-nowrap"
+                style={{
+                  backgroundColor: showSeg ? "oklch(0.65 0.22 20/0.15)" : "transparent",
+                  borderColor: showSeg ? "oklch(0.65 0.22 20/0.55)" : "var(--border-subtle)",
+                  color: showSeg ? "oklch(0.80 0.22 20)" : "var(--text-muted)"
                 }}
               >
-                {showSeg ? <Eye className="w-3.5 h-3.5"/> : <EyeOff className="w-3.5 h-3.5"/>}
-                MÁSCARA IA
+                {showSeg ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                Segmentación IA
+                <span
+                  className="w-2 h-2 rounded-full ml-1 transition-colors"
+                  style={{ backgroundColor: showSeg ? "oklch(0.65 0.22 20)" : "var(--text-muted)" }}
+                />
               </button>
-              
+              {/* Navigation between hallazgos */}
               {segArr.length > 0 && (
-                <div className="flex items-center px-1.5 py-1 gap-1 border-l" style={{ borderColor: "var(--border-subtle)", backgroundColor: "transparent" }}>
-                  <button onClick={()=>jumpToSeg(-1)} title="Anterior hallazgo" className="p-1 rounded hover:bg-white/10 transition-colors" style={{ color:"var(--text-secondary)" }}><SkipBack className="w-3.5 h-3.5"/></button>
-                  <span className="text-[11px] font-mono font-semibold w-16 text-center" style={{ color: hasSegHere ? "oklch(0.65 0.22 20)" : "var(--text-muted)" }}>
-                    {segArr.length} cortes
+                <div className="flex items-center gap-1 bg-black/20 rounded-lg border px-1" style={{ borderColor: "var(--border-subtle)" }}>
+                  <button onClick={() => jumpToSeg(-1)} title="Hallazgo anterior" className="p-1.5 rounded-md hover:bg-white/10 transition-colors" style={{ color: "var(--text-secondary)" }}><SkipBack className="w-3.5 h-3.5"/></button>
+                  <span className="text-[11px] font-mono font-semibold px-2" style={{ color: hasSegHere ? "oklch(0.75 0.22 20)" : "var(--text-muted)" }}>
+                    {hasSegHere ? "●" : "○"} {segArr.length} hallazgos
                   </span>
-                  <button onClick={()=>jumpToSeg(1)} title="Siguiente hallazgo" className="p-1 rounded hover:bg-white/10 transition-colors" style={{ color:"var(--text-secondary)" }}><SkipForward className="w-3.5 h-3.5"/></button>
+                  <button onClick={() => jumpToSeg(1)} title="Siguiente hallazgo" className="p-1.5 rounded-md hover:bg-white/10 transition-colors" style={{ color: "var(--text-secondary)" }}><SkipForward className="w-3.5 h-3.5"/></button>
                 </div>
               )}
             </div>
@@ -717,10 +764,6 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
               </button>
             ))}
           </div>
-          
-          <div className="w-px h-5" style={{ backgroundColor:"var(--border-subtle)" }}/>
-          <button onClick={()=>setZoom(z=>Math.min(8,z+0.25))} className="p-1 rounded hover:bg-white/10" style={{ color:"var(--text-muted)" }}><ZoomIn className="w-4 h-4"/></button>
-          <button onClick={()=>setZoom(z=>Math.max(0.25,z-0.25))} className="p-1 rounded hover:bg-white/10" style={{ color:"var(--text-muted)" }}><ZoomOut className="w-4 h-4"/></button>
         </div>
       </div>
 
@@ -735,7 +778,7 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
 
       {/* Grid wrapper — takes all remaining flex space; grid fills it absolutely */}
       <div style={{ flex: 1, minHeight: 0, position: "relative", overflow: "hidden" }}>
-        <div style={{ position: "absolute", inset: 0, display:"grid", gridTemplateColumns:"1fr 1fr 1fr", backgroundColor:"#000" }}>
+        <div style={{ position: "absolute", left: 0, right: "80px", top: 0, bottom: 0, display:"grid", gridTemplateColumns:"1fr 1fr 1fr", backgroundColor:"#000" }}>
 
         {/* ── Axial ─────────────────────────────────────────────────────── */}
         <div className="relative overflow-hidden"
@@ -746,37 +789,51 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
           <canvas ref={axialRef} style={{ width:"100%", height:"100%", display:"block" }}/>
           {status==="ready" && (
             <>
-              <div className="absolute top-2 left-2 text-[10px] font-mono pointer-events-none select-none"
-                style={{ color:"oklch(0.75 0 0)", lineHeight:1.7 }}>
-                <div>AXIAL — Slice {sliceIdx+1}/{n}</div>
-                <div>WC {wc} | WW {ww}</div>
-                {hasSegHere && showSeg && <div style={{ color:"oklch(0.75 0.22 20)" }}>● Hallazgo en este corte</div>}
+              {/* Label top-left */}
+              <div className="absolute top-2 left-2 z-10 pointer-events-none select-none flex flex-col gap-0.5">
+                <span className="text-[13px] font-mono font-bold tracking-widest" style={{ color: "oklch(0.72 0.17 195)" }}>AXIAL</span>
+                <span className="text-[11px] font-mono" style={{ color: "oklch(0.50 0 0)" }}>WC {wc} | WW {ww}</span>
+                {hasSegHere && showSeg && <span className="text-[11px] font-mono" style={{ color:"oklch(0.75 0.22 20)" }}>● Hallazgo</span>}
               </div>
-              {showSeg && segArr.length>0 && (
-                <div className="absolute bottom-8 left-2 flex items-center gap-1.5 text-[10px] pointer-events-none select-none">
+              {/* Slice counter top-right */}
+              <div className="absolute top-2 right-2 z-10 text-[13px] font-mono font-bold pointer-events-none select-none" style={{ color: "oklch(0.72 0.17 195)" }}>
+                {sliceIdx + 1} <span className="text-[12px] font-bold">/ {n}</span>
+              </div>
+              {/* Seg legend bottom-left */}
+              {showSeg && segArr.length > 0 && (
+                <div className="absolute bottom-16 left-3 flex items-center gap-1.5 text-[10px] pointer-events-none select-none">
                   <div className="w-3 h-3 rounded-sm" style={{ backgroundColor:"rgba(255,60,60,0.6)" }}/>
                   <span style={{ color:"oklch(0.75 0.22 20)" }}>Región segmentada · {segArr.length} cortes</span>
                 </div>
               )}
+              {/* Zoom controls overlaid bottom-right */}
+              <div className="absolute bottom-16 right-3 flex items-center gap-1.5 bg-black/60 rounded-xl border px-2 py-1.5 backdrop-blur-md shadow-2xl pointer-events-auto" style={{ borderColor: "oklch(0.3 0 0)" }}>
+                <button onClick={(e) => { e.stopPropagation(); setZoom(z => Math.max(0.25, z - 0.25)) }} className="p-1.5 rounded-lg hover:bg-white/20 transition-colors text-white/80 hover:text-white" title="Alejar (Zoom Out)"><ZoomOut className="w-5 h-5"/></button>
+                <span className="text-[13px] font-mono font-bold w-12 text-center text-white/90 select-none">{Math.round(zoom * 100)}%</span>
+                <button onClick={(e) => { e.stopPropagation(); setZoom(z => Math.min(8, z + 0.25)) }} className="p-1.5 rounded-lg hover:bg-white/20 transition-colors text-white/80 hover:text-white" title="Acercar (Zoom In)"><ZoomIn className="w-5 h-5"/></button>
+                <div className="w-px h-6 bg-white/20 mx-0.5"></div>
+                <button onClick={(e) => { e.stopPropagation(); setZoom(1); setPan({x:0, y:0}); }} className="p-1.5 rounded-lg hover:bg-white/20 transition-colors text-white/80 hover:text-white" title="Centrar y restablecer vista"><LocateFixed className="w-5 h-5"/></button>
+              </div>
               {/* Minimap strip */}
-              <div className="absolute bottom-0 left-0 right-0 flex items-center gap-1 px-2 py-1"
-                style={{ backgroundColor:"rgba(0,0,0,0.65)", borderTop:"1px solid oklch(0.2 0 0)" }}>
-                <button onClick={()=>setSliceIdx(i=>Math.max(0,i-1))} className="p-0.5 rounded hover:bg-white/10"
-                  style={{ color:"var(--text-muted)" }}><ChevronUp className="w-3 h-3"/></button>
-                <div className="relative flex-1 h-4 rounded overflow-hidden" style={{ backgroundColor:"rgba(255,255,255,0.05)" }}>
+              <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2 px-3 py-2"
+                style={{ backgroundColor:"rgba(0,0,0,0.75)", borderTop:"1px solid oklch(0.25 0 0)" }}
+                onClick={e => e.stopPropagation()}>
+                <button onClick={()=>setSliceIdx(i=>Math.max(0,i-1))} className="p-1.5 rounded-lg bg-white/5 hover:bg-white/20 transition-colors text-white/90 hover:text-white"
+                  title="Corte anterior"><ChevronLeft className="w-4 h-4"/></button>
+                <div className="relative flex-1 h-8 rounded-md overflow-hidden" style={{ backgroundColor:"rgba(255,255,255,0.1)" }}>
                   {Array.from({length:Math.min(n,200)},(_,i)=>{
                     const si=Math.round(i/Math.min(n,200)*n);
                     const isAct=Math.abs(si-sliceIdx)<2;
                     const hasSeg=segmentedSlices.has(si);
                     return <div key={i} onClick={()=>setSliceIdx(si)}
                       style={{ position:"absolute", left:`${(i/Math.min(n,200))*100}%`, top:0, bottom:0,
-                        width:`${100/Math.min(n,200)}%`, cursor:"pointer",
+                        width:`calc(${100/Math.min(n,200)}% + 1px)`, cursor:"pointer",
                         backgroundColor:isAct?"rgba(255,255,255,0.9)":hasSeg?"rgba(255,60,60,0.7)":"transparent" }}/>;
                   })}
                 </div>
-                <button onClick={()=>setSliceIdx(i=>Math.min(n-1,i+1))} className="p-0.5 rounded hover:bg-white/10"
-                  style={{ color:"var(--text-muted)" }}><ChevronDown className="w-3 h-3"/></button>
-                <span className="text-[9px] font-mono ml-1" style={{ color:"oklch(0.5 0 0)" }}>{sliceIdx+1}/{n}</span>
+                <button onClick={()=>setSliceIdx(i=>Math.min(n-1,i+1))} className="p-1.5 rounded-lg bg-white/5 hover:bg-white/20 transition-colors text-white/90 hover:text-white"
+                  title="Corte siguiente"><ChevronRight className="w-4 h-4"/></button>
+                <span className="text-xs font-mono font-bold ml-2 min-w-[50px] text-right text-white/90">{sliceIdx+1}/{n}</span>
               </div>
             </>
           )}
@@ -798,15 +855,19 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
           <canvas ref={coronalRef} style={{ width:"100%", height:"100%", display:"block" }}/>
           {status!=="ready" && <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center",
             justifyContent:"center", color:"oklch(0.35 0 0)", fontSize:"10px", fontFamily:"monospace" }}>CORONAL</div>}
-          <div className="absolute top-1 left-2 z-10 text-[10px] font-mono pointer-events-none select-none"
-            style={{ color:"oklch(0.72 0.17 195)" }}>CORONAL</div>
-          <div className="absolute top-1 right-2 z-10 text-[10px] font-mono pointer-events-none select-none"
-            style={{ color:"oklch(0.5 0 0)" }}>Y={coronalY}</div>
+          {/* Label + position */}
+          <div className="absolute top-2 left-2 z-10 pointer-events-none select-none flex flex-col gap-0.5">
+            <span className="text-[13px] font-mono font-bold tracking-widest" style={{ color: "oklch(0.68 0.20 145)" }}>CORONAL</span>
+          </div>
+          <div className="absolute top-2 right-2 z-10 text-[13px] font-mono font-bold pointer-events-none select-none" style={{ color: "oklch(0.68 0.20 145)" }}>
+            {coronalY + 1} <span className="text-[12px] font-bold">/ {slices[0]?.rows || 512}</span>
+          </div>
           {status==="ready" && (
-            <div className="absolute bottom-0 left-0 right-0 flex items-center gap-1 px-2 py-1"
-              style={{ backgroundColor:"rgba(0,0,0,0.65)", borderTop:"1px solid oklch(0.2 0 0)" }}>
-              <button onClick={()=>setCoronalY(y=>Math.max(0,y-4))} className="p-0.5 rounded hover:bg-white/10" style={{color:"var(--text-muted)"}}><ChevronLeft className="w-3 h-3"/></button>
-              <div className="relative flex-1 h-4 rounded overflow-hidden" style={{backgroundColor:"rgba(255,255,255,0.05)"}}>
+            <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2 px-3 py-2"
+              style={{ backgroundColor:"rgba(0,0,0,0.75)", borderTop:"1px solid oklch(0.25 0 0)" }}
+              onClick={e => e.stopPropagation()}>
+              <button onClick={()=>setCoronalY(y=>Math.max(0,y-4))} className="p-1.5 rounded-lg bg-white/5 hover:bg-white/20 transition-colors text-white/90 hover:text-white" title="Desplazar plano"><ChevronLeft className="w-4 h-4"/></button>
+              <div className="relative flex-1 h-8 rounded-md overflow-hidden" style={{backgroundColor:"rgba(255,255,255,0.1)"}}>
                 {(() => {
                   const total = slices[0]?.rows || 512;
                   const ns = Math.min(total, 200);
@@ -817,13 +878,13 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
                     const yi = segData ? Math.min(Math.round((cy/Math.max(total-1,1))*(ny-1)),ny-1) : -1;
                     const hasSeg = segYInMask.has(yi);
                     return <div key={i} onClick={()=>setCoronalY(cy)}
-                      style={{position:"absolute",left:`${(i/ns)*100}%`,top:0,bottom:0,width:`${100/ns}%`,cursor:"pointer",
+                      style={{position:"absolute",left:`${(i/ns)*100}%`,top:0,bottom:0,width:`calc(${100/ns}% + 1px)`,cursor:"pointer",
                         backgroundColor:isAct?"rgba(255,255,255,0.9)":hasSeg?"rgba(255,60,60,0.7)":"transparent"}}/>;
                   });
                 })()}
               </div>
-              <button onClick={()=>setCoronalY(y=>Math.min((slices[0]?.rows||512)-1,y+4))} className="p-0.5 rounded hover:bg-white/10" style={{color:"var(--text-muted)"}}><ChevronRight className="w-3 h-3"/></button>
-              <span className="text-[9px] font-mono ml-1" style={{color:"oklch(0.5 0 0)"}}>{coronalY+1}/{slices[0]?.rows||512}</span>
+              <button onClick={()=>setCoronalY(y=>Math.min((slices[0]?.rows||512)-1,y+4))} className="p-1.5 rounded-lg bg-white/5 hover:bg-white/20 transition-colors text-white/90 hover:text-white" title="Desplazar plano"><ChevronRight className="w-4 h-4"/></button>
+              <span className="text-xs font-mono font-bold ml-2 min-w-[50px] text-right text-white/90">{coronalY+1}/{slices[0]?.rows||512}</span>
             </div>
           )}
         </div>
@@ -842,15 +903,19 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
           <canvas ref={sagittalRef} style={{ width:"100%", height:"100%", display:"block" }}/>
           {status!=="ready" && <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center",
             justifyContent:"center", color:"oklch(0.35 0 0)", fontSize:"10px", fontFamily:"monospace" }}>SAGITAL</div>}
-          <div className="absolute top-1 left-2 z-10 text-[10px] font-mono pointer-events-none select-none"
-            style={{ color:"oklch(0.80 0.16 80)" }}>SAGITAL</div>
-          <div className="absolute top-1 right-2 z-10 text-[10px] font-mono pointer-events-none select-none"
-            style={{ color:"oklch(0.5 0 0)" }}>X={sagittalX}</div>
+          {/* Label + position */}
+          <div className="absolute top-2 left-2 z-10 pointer-events-none select-none flex flex-col gap-0.5">
+            <span className="text-[13px] font-mono font-bold tracking-widest" style={{ color: "oklch(0.80 0.16 80)" }}>SAGITAL</span>
+          </div>
+          <div className="absolute top-2 right-2 z-10 text-[13px] font-mono font-bold pointer-events-none select-none" style={{ color: "oklch(0.80 0.16 80)" }}>
+            {sagittalX + 1} <span className="text-[12px] font-bold">/ {slices[0]?.cols || 512}</span>
+          </div>
           {status==="ready" && (
-            <div className="absolute bottom-0 left-0 right-0 flex items-center gap-1 px-2 py-1"
-              style={{ backgroundColor:"rgba(0,0,0,0.65)", borderTop:"1px solid oklch(0.2 0 0)" }}>
-              <button onClick={()=>setSagittalX(x=>Math.max(0,x-4))} className="p-0.5 rounded hover:bg-white/10" style={{color:"var(--text-muted)"}}><ChevronLeft className="w-3 h-3"/></button>
-              <div className="relative flex-1 h-4 rounded overflow-hidden" style={{backgroundColor:"rgba(255,255,255,0.05)"}}>
+            <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2 px-3 py-2"
+              style={{ backgroundColor:"rgba(0,0,0,0.75)", borderTop:"1px solid oklch(0.25 0 0)" }}
+              onClick={e => e.stopPropagation()}>
+              <button onClick={()=>setSagittalX(x=>Math.max(0,x-4))} className="p-1.5 rounded-lg bg-white/5 hover:bg-white/20 transition-colors text-white/90 hover:text-white" title="Desplazar plano"><ChevronLeft className="w-4 h-4"/></button>
+              <div className="relative flex-1 h-8 rounded-md overflow-hidden" style={{backgroundColor:"rgba(255,255,255,0.1)"}}>
                 {(() => {
                   const total = slices[0]?.cols || 512;
                   const ns = Math.min(total, 200);
@@ -861,13 +926,13 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
                     const xi = segData ? Math.min(Math.round((cx/Math.max(total-1,1))*(nx-1)),nx-1) : -1;
                     const hasSeg = segXInMask.has(xi);
                     return <div key={i} onClick={()=>setSagittalX(cx)}
-                      style={{position:"absolute",left:`${(i/ns)*100}%`,top:0,bottom:0,width:`${100/ns}%`,cursor:"pointer",
+                      style={{position:"absolute",left:`${(i/ns)*100}%`,top:0,bottom:0,width:`calc(${100/ns}% + 1px)`,cursor:"pointer",
                         backgroundColor:isAct?"rgba(255,255,255,0.9)":hasSeg?"rgba(255,60,60,0.7)":"transparent"}}/>;
                   });
                 })()}
               </div>
-              <button onClick={()=>setSagittalX(x=>Math.min((slices[0]?.cols||512)-1,x+4))} className="p-0.5 rounded hover:bg-white/10" style={{color:"var(--text-muted)"}}><ChevronRight className="w-3 h-3"/></button>
-              <span className="text-[9px] font-mono ml-1" style={{color:"oklch(0.5 0 0)"}}>{sagittalX+1}/{slices[0]?.cols||512}</span>
+              <button onClick={()=>setSagittalX(x=>Math.min((slices[0]?.cols||512)-1,x+4))} className="p-1.5 rounded-lg bg-white/5 hover:bg-white/20 transition-colors text-white/90 hover:text-white" title="Desplazar plano"><ChevronRight className="w-4 h-4"/></button>
+              <span className="text-xs font-mono font-bold ml-2 min-w-[50px] text-right text-white/90">{sagittalX+1}/{slices[0]?.cols||512}</span>
             </div>
           )}
         </div>
@@ -875,27 +940,27 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
         </div>{/* /grid (position:absolute, 3 columns) */}
 
         {/* ── W/L Slider — absolutely overlaid on right edge ────────── */}
-        <div style={{ position:"absolute", right:0, top:0, bottom:0, width:"68px", zIndex:10,
+        <div style={{ position:"absolute", right:0, top:0, bottom:0, width:"80px", zIndex:10,
           display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"space-evenly",
           borderLeft:"1px solid oklch(0.18 0 0)", backgroundColor:"oklch(0.08 0 0)", padding:"10px 6px" }}>
 
-          <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:"4px" }}>
-            <span style={{ fontSize:"9px", fontFamily:"monospace", color:"oklch(0.65 0 0)", textTransform:"uppercase" }}>WW</span>
-            <span style={{ fontSize:"11px", fontFamily:"monospace", color:"oklch(0.72 0.17 195)", fontWeight:600 }}>{ww}</span>
+          <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:"6px" }}>
+            <span style={{ fontSize:"12px", fontFamily:"monospace", color:"oklch(0.65 0 0)", textTransform:"uppercase", fontWeight:"bold" }}>WW</span>
+            <span style={{ fontSize:"14px", fontFamily:"monospace", color:"oklch(0.72 0.17 195)", fontWeight:700 }}>{ww}</span>
             <input type="range" min={1} max={4096} value={ww}
               onChange={e=>{ setWw(+e.target.value); setWinIdx(-1); }}
-              style={{ writingMode:"vertical-lr", direction:"rtl", height:"120px", cursor:"pointer",
+              style={{ writingMode:"vertical-lr", direction:"rtl", height:"160px", cursor:"pointer",
                 accentColor:"oklch(0.72 0.17 195)" }}/>
           </div>
 
           <div style={{ width:"80%", height:"1px", backgroundColor:"oklch(0.2 0 0)" }}/>
 
-          <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:"4px" }}>
-            <span style={{ fontSize:"9px", fontFamily:"monospace", color:"oklch(0.65 0 0)", textTransform:"uppercase" }}>WC</span>
-            <span style={{ fontSize:"11px", fontFamily:"monospace", color:"oklch(0.80 0.16 80)", fontWeight:600 }}>{wc}</span>
+          <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:"6px" }}>
+            <span style={{ fontSize:"12px", fontFamily:"monospace", color:"oklch(0.65 0 0)", textTransform:"uppercase", fontWeight:"bold" }}>WC</span>
+            <span style={{ fontSize:"14px", fontFamily:"monospace", color:"oklch(0.80 0.16 80)", fontWeight:700 }}>{wc}</span>
             <input type="range" min={-1024} max={3071} value={wc}
               onChange={e=>{ setWc(+e.target.value); setWinIdx(-1); }}
-              style={{ writingMode:"vertical-lr", direction:"rtl", height:"120px", cursor:"pointer",
+              style={{ writingMode:"vertical-lr", direction:"rtl", height:"160px", cursor:"pointer",
                 accentColor:"oklch(0.80 0.16 80)" }}/>
           </div>
 

@@ -297,7 +297,7 @@ async def create_segmentation_job(
     6. Retorna 202 Accepted inmediatamente.
 
     Los archivos DICOM se conservan en disco para permitir re-análisis clínico
-    y visualización posterior con Cornerstone3D sin re-ejecutar el modelo.
+    y visualización posterior con el visor Canvas customizado sin re-ejecutar el modelo.
     """
     # --- 1. Generar job_id UUID v4 puro ---
     # UUID v4 completo: 2^122 posibilidades, imposible de adivinar por fuerza bruta.
@@ -305,7 +305,7 @@ async def create_segmentation_job(
     job_id = str(uuid.uuid4())
 
     # --- 2. Crear directorio para los DICOM subidos ---
-    # Se mantiene permanentemente para re-análisis y visualización con Cornerstone3D
+    # Se mantiene permanentemente para re-análisis y visualización con el visor customizado
     temp_dicom_dir = LOCAL_STORAGE_BASE / "inputs" / f"temp_{job_id}"
     temp_dicom_dir.mkdir(parents=True, exist_ok=True)
 
@@ -577,7 +577,7 @@ async def create_segmentation_job_from_nifti(
     description=(
         "Consulta la base de datos SQLite y retorna el estado actual "
         "del Job. Si está COMPLETED, incluye clinical_results y artifacts "
-        "(con dicom_image_ids para Cornerstone3D)."
+        "(con dicom_image_ids para el visor)."
     ),
 )
 def get_job_status(
@@ -670,7 +670,7 @@ def get_job_status(
 
 # ===========================================================================
 # Endpoint: GET /dicom/{job_id}/{filename}
-# Protegido por API Key — sirve slices DICOM para Cornerstone3D
+# Protegido por API Key — sirve slices DICOM para el visor customizado
 # ===========================================================================
 @app.get(
     "/dicom/{job_id}/{filename}",
@@ -678,7 +678,7 @@ def get_job_status(
     description=(
         "Sirve un archivo DICOM individual del directorio del job. "
         "Requiere el header X-API-Key para acceso. "
-        "Cornerstone3D lo consume vía wado: URI scheme."
+        "El visor lo consume vía API HTTP."
     ),
 )
 async def serve_dicom_file(
@@ -723,7 +723,7 @@ async def serve_dicom_file(
     description=(
         "Sirve el archivo .nii.gz de segmentación generado para el job. "
         "Requiere el header X-API-Key para acceso. "
-        "Cornerstone3D lo consume vía el nifti-volume-loader."
+        "El visor lo consume vía API HTTP."
     ),
 )
 async def serve_nifti_file(

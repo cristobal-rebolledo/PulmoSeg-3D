@@ -1,10 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { ArrowRightLeft } from "lucide-react";
+import { ArrowRightLeft, X } from "lucide-react";
 import Sidebar from "@/components/layout/Sidebar";
 import Header from "@/components/layout/Header";
 import ResultsDashboard from "@/components/results/ResultsDashboard";
 import HistoryView from "@/components/views/HistoryView";
 import SettingsView from "@/components/views/SettingsView";
+import DicomUploader from "@/components/upload/DicomUploader";
 import { createSegmentationJob, cancelJob, getJobStatus } from "@/api/client";
 import { clearViewerCache } from "@/components/viewer/DicomCanvasViewer";
 
@@ -62,6 +63,9 @@ export default function App() {
 
   // --- Sidebar collapsed state (lifted up for layout sync) ---
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // --- Modal state for DICOM upload ---
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
 
   // ---------------------------------------------------------------------------
   // Multi-job polling loop — optimizado para rendimiento
@@ -180,6 +184,10 @@ export default function App() {
       
       setJobs((prev) => [uploadingJob, ...prev]);
 
+      // Cerrar el modal inmediatamente para no bloquear la interfaz.
+      // El Job aparecerá en el sidebar con estado UPLOADING.
+      setIsUploadModalOpen(false);
+
       try {
         const response = await createSegmentationJob({ files, patientId, studyUid });
 
@@ -244,9 +252,9 @@ export default function App() {
   }, []);
 
   // --- Load historical results from HistoryView ---
-  const handleViewFromHistory = useCallback(async (jobId) => {
+  const handleViewFromHistory = useCallback(async (jobId, patientPseudoId) => {
     if (activeJobId && activeJobId !== jobId) {
-      setPendingAction({ type: "history", jobId, patientId: `Estudio ${jobId.slice(0, 8)}` });
+      setPendingAction({ type: "history", jobId, patientId: patientPseudoId || `Estudio ${jobId.slice(0, 8)}` });
       return;
     }
     try {
@@ -294,8 +302,7 @@ export default function App() {
           volumeMl:   completedResults[j.id]?.clinicalResults?.volumetric_data?.volume_ml   ?? null,
           diameterMm: completedResults[j.id]?.clinicalResults?.recist_metrics?.longest_diameter_mm ?? null,
         }))}
-        onSubmit={handleSubmit}
-        isSubmitting={isSubmitting}
+        onNewAnalysis={() => setIsUploadModalOpen(true)}
         activeJobId={activeJobId}
         onSelectJob={handleSelectJob}
         onCancel={handleCancel}
@@ -313,6 +320,7 @@ export default function App() {
           subtitle={currentView.subtitle}
           theme={theme}
           onToggleTheme={toggleTheme}
+          onCloseStudy={activeView === "viewer" && activeJobId ? handleCloseStudy : null}
         />
 
         {/* Content area — viewer is always flex/overflow-hidden to fill space */}
@@ -418,6 +426,15 @@ export default function App() {
                 Sí, cambiar estudio
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {/* Upload Modal */}
+      {isUploadModalOpen && (
+        <div className="fixed inset-0 z-[999] flex items-center justify-center bg-black/70 backdrop-blur-md animate-[fade-in_0.2s_ease-out]">
+          {/* Modal Container */}
+          <div className="relative w-full max-w-2xl mx-4 animate-[slide-up_0.3s_ease-out]">
+            <DicomUploader onSubmit={handleSubmit} isSubmitting={isSubmitting} onClose={() => setIsUploadModalOpen(false)} />
           </div>
         </div>
       )}

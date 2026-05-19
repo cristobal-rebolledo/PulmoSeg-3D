@@ -100,7 +100,7 @@ export async function checkHealth() {
  *
  * Sends the actual DICOM files alongside metadata as FormData.
  * The backend saves the files permanently to temp_{job_id}/ for
- * later visualization with Cornerstone3D.
+ * later visualization with the custom Canvas viewer.
  *
  * IMPORTANT: Do NOT set Content-Type header manually — the browser
  * must set it automatically with the correct multipart boundary.
@@ -157,7 +157,7 @@ export async function createSegmentationJob({ files, patientId, studyUid }) {
  * GET /status/{job_id} — Get current job status and results.
  *
  * Returns job info, progress, state history, and (if COMPLETED)
- * clinical_results and artifacts (including dicom_image_ids for Cornerstone3D).
+ * clinical_results and artifacts (including dicom_image_ids for the viewer).
  *
  * @param {string} jobId - The job identifier returned by POST /segment
  *
