@@ -178,7 +178,7 @@ class Artifacts(BaseModel):
     dicom_image_ids: Optional[list[str]] = Field(
         None,
         description=(
-            "Lista de rutas relativas a los slices DICOM para Cornerstone3D. "
+            "Lista de rutas relativas a los slices DICOM para el visor. "
             "Formato: ['/dicom/{job_id}/slice001.dcm', ...]. "
             "El frontend antepone /api y el X-API-Key header."
         )
