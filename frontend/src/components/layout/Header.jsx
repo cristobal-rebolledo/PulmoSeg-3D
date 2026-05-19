@@ -44,18 +44,14 @@ export default function Header({ title, subtitle, theme, onToggleTheme, onCloseS
           <button
             onClick={onCloseStudy}
             className={cn(
-              "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold",
-              "border transition-all duration-200 cursor-pointer shadow-sm",
-              "hover:border-[var(--border-accent)] active:scale-95"
+              "group flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold",
+              "border border-[var(--border-subtle)] bg-[var(--bg-card)] text-[var(--text-secondary)]",
+              "transition-all duration-200 cursor-pointer shadow-sm",
+              "hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400 active:scale-95"
             )}
-            style={{
-              borderColor: "var(--border-subtle)",
-              backgroundColor: "var(--bg-card)",
-              color: "var(--text-secondary)",
-            }}
             title="Cerrar estudio actual"
           >
-            <X className="w-3.5 h-3.5" />
+            <X className="w-3.5 h-3.5 transition-transform group-hover:rotate-90" />
             <span>Cerrar Estudio</span>
           </button>
         )}
