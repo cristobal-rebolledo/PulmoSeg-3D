@@ -365,7 +365,7 @@ export default function HistoryView({ onViewJob }) {
                         )}
                         style={isCompleted ? { color: "var(--text-accent)" } : { color: "var(--text-muted)" }}
                         disabled={!isCompleted}
-                        onClick={() => isCompleted && onViewJob?.(row.job_id)}
+                        onClick={() => isCompleted && onViewJob?.(row.job_id, row.patient_pseudo_id)}
                       >
                         <span className="text-center">Ver Resultados</span>
                         <ChevronRight className="w-4 h-4" />

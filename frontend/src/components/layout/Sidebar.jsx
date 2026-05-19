@@ -7,8 +7,8 @@ import {
   Activity,
   Stethoscope,
   ChevronDown,
+  Plus,
 } from "lucide-react";
-import CompactDropzone from "@/components/upload/CompactDropzone";
 
 /**
  * Sidebar — Rediseñado para el layout de dos paneles permanentes.
@@ -196,8 +196,7 @@ export default function Sidebar({
   activeView,
   onNavigate,
   jobs = [],
-  onSubmit,
-  isSubmitting,
+  onNewAnalysis,
   activeJobId,
   onSelectJob,
   onCancel,
@@ -270,9 +269,19 @@ export default function Sidebar({
 
         {!collapsed ? (
           <>
-            {/* ── Compact Dropzone ─────────────────────────────────────────── */}
             <div style={{ padding: `16px ${PAD_H}px 0` }}>
-              <CompactDropzone onSubmit={onSubmit} isSubmitting={isSubmitting} />
+              <button
+                onClick={onNewAnalysis}
+                className="w-full flex items-center justify-center gap-2.5 px-6 h-12 rounded-[14px] text-base font-bold shadow-lg transition-all hover:brightness-110 hover:-translate-y-0.5"
+                style={{
+                  background: "linear-gradient(135deg, var(--color-accent-500), var(--color-primary-500))",
+                  color: "#fff",
+                  boxShadow: "0 6px 20px oklch(0.72 0.17 195 / 0.30)"
+                }}
+              >
+                <Plus className="w-5 h-5" strokeWidth={2.5} />
+                Nuevo Análisis
+              </button>
             </div>
 
             {/* ── Divider ──────────────────────────────────────────────────── */}
@@ -396,9 +405,27 @@ export default function Sidebar({
         ) : (
           /* ── Collapsed: icon-only nav ──────────────────────────────────── */
           <nav style={{
-            flex: 1, padding: `12px ${PAD_H_C}px`,
-            display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+            flex: 1, padding: `16px ${PAD_H_C}px`,
+            display: "flex", flexDirection: "column", alignItems: "center", gap: 6,
           }}>
+            {/* Collapsed Nuevo Analisis Button */}
+            <button
+              onClick={onNewAnalysis}
+              title="Nuevo Análisis"
+              className="flex items-center justify-center rounded-[14px] shadow-lg transition-all hover:brightness-110 hover:-translate-y-0.5 mb-2"
+              style={{
+                width: 48, height: 48, flexShrink: 0,
+                background: "linear-gradient(135deg, var(--color-accent-500), var(--color-primary-500))",
+                color: "#fff",
+                boxShadow: "0 6px 20px oklch(0.72 0.17 195 / 0.30)",
+              }}
+            >
+              <Plus className="w-6 h-6" strokeWidth={2.5} />
+            </button>
+
+            {/* Divider */}
+            <div style={{ width: "24px", height: "1px", backgroundColor: "var(--border-subtle)", margin: "4px 0 6px 0" }} />
+
             {NAV_ITEMS.map((item) => {
               const isActive = activeView === item.key;
               const Icon = item.icon;

@@ -1,4 +1,4 @@
-import { Beaker, Ruler, Target, Timer, Cpu, User, X } from "lucide-react";
+import { Beaker, Ruler, Target, Cpu, Info } from "lucide-react";
 
 function getDuration(stateHistory, fromState, toState) {
   const from = stateHistory?.find((e) => e.state === fromState);
@@ -12,14 +12,27 @@ function fmtSec(s) {
 }
 
 // ─── Metric Cell ─────────────────────────────────────────────────────────────
-function MetricCell({ Icon, label, value, unit, sub, color, bg }) {
+function MetricCell({ Icon, label, value, unit, sub, color, bg, tooltip }) {
   return (
-    <div className="flex flex-col justify-between p-4 rounded-xl flex-1 shrink-0 min-w-[200px]" style={{ backgroundColor: "var(--bg-card)", border: "1px solid var(--border-subtle)", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
+    <div className="flex flex-col justify-between p-4 rounded-xl flex-1 shrink-0 min-w-[200px] relative" style={{ backgroundColor: "var(--bg-card)", border: "1px solid var(--border-subtle)", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
       <div className="flex items-center gap-2 mb-2">
         <div className="w-6 h-6 rounded flex items-center justify-center shrink-0" style={{ backgroundColor: bg }}>
           <Icon style={{ color, width: "0.875rem", height: "0.875rem" }} />
         </div>
         <h4 className="text-xs font-bold uppercase tracking-wider truncate" style={{ color: "var(--text-muted)" }}>{label}</h4>
+        
+        {tooltip && (
+          <div className="ml-auto relative flex items-center justify-center">
+            <Info className="w-3.5 h-3.5 text-[var(--text-muted)] cursor-help hover:text-[var(--text-primary)] transition-colors peer" />
+            <div 
+              className="absolute top-[calc(100%+8px)] left-1/2 -translate-x-1/2 w-64 p-4 rounded-xl text-[13px] leading-relaxed font-medium shadow-2xl opacity-0 scale-95 peer-hover:opacity-100 peer-hover:scale-100 transition-all pointer-events-none z-[100] origin-top" 
+              style={{ backgroundColor: "var(--bg-sidebar)", color: "var(--text-primary)", border: "1px solid var(--border-subtle)" }}
+            >
+              {tooltip}
+              <div className="absolute bottom-full left-1/2 -translate-x-1/2 w-2 h-2 -mb-[1px] border-t border-l transform rotate-45" style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-sidebar)" }}></div>
+            </div>
+          </div>
+        )}
       </div>
       <div className="flex flex-col min-w-0">
         <div className="flex items-baseline gap-1.5">
@@ -55,13 +68,13 @@ export default function MetricsBar({ clinicalResults, patientId, stateHistory, o
 
   return (
     <div
-      className="flex flex-wrap md:flex-nowrap items-center shrink-0 px-4 py-4 gap-3 relative z-10"
+      className="flex flex-wrap items-center shrink-0 px-4 py-4 gap-3 relative z-[100]"
       style={{
         backgroundColor: "var(--bg-app)",
         borderBottom: "1px solid var(--border-subtle)",
       }}
     >
-      <div className="flex flex-1 gap-3 overflow-x-auto pb-1 md:pb-0" style={{ scrollbarWidth: "none" }}>
+      <div className="flex flex-wrap flex-1 gap-3 pb-1 md:pb-0">
         <MetricCell
           Icon={Beaker}
           label="Volumen del Nódulo"
@@ -70,6 +83,7 @@ export default function MetricsBar({ clinicalResults, patientId, stateHistory, o
           sub={volMm3 != null ? `${Math.round(volMm3).toLocaleString()} mm³` : undefined}
           color="oklch(0.72 0.17 195)"
           bg="oklch(0.72 0.17 195 / 0.12)"
+          tooltip="Representa el volumen tridimensional estimado de la lesión pulmonar segmentada por el modelo."
         />
 
         <MetricCell
@@ -80,6 +94,7 @@ export default function MetricsBar({ clinicalResults, patientId, stateHistory, o
           sub={plane ? `Plano: ${plane}` : undefined}
           color="oklch(0.80 0.16 80)"
           bg="oklch(0.80 0.16 80 / 0.12)"
+          tooltip="Medida más larga del nódulo en un plano 2D (criterios RECIST para evaluación de tumores)."
         />
 
         <MetricCell
@@ -90,45 +105,23 @@ export default function MetricsBar({ clinicalResults, patientId, stateHistory, o
           sub={confLabel}
           color="oklch(0.72 0.19 155)"
           bg="oklch(0.72 0.19 155 / 0.12)"
+          tooltip="Nivel de certeza de la red neuronal de que la región segmentada corresponde a un nódulo real."
         />
-      </div>
 
-      <div className="flex items-stretch gap-3 shrink-0">
-        {(totalTime !== null || procTime !== null) && (
-          <div className="flex flex-col justify-center gap-3 px-5 py-4 rounded-xl shrink-0 min-w-[160px]" style={{ backgroundColor: "var(--bg-card)", border: "1px solid var(--border-subtle)", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
-            {totalTime !== null && (
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-2">
-                  <Timer className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Total</span>
-                </div>
-                <span className="text-sm font-mono font-bold" style={{ color: "var(--text-secondary)" }}>{fmtSec(totalTime)}</span>
-              </div>
-            )}
-            {procTime !== null && (
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-2">
-                  <Cpu className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Inferencia</span>
-                </div>
-                <span className="text-sm font-mono font-bold" style={{ color: "var(--text-secondary)" }}>{fmtSec(procTime)}</span>
-              </div>
-            )}
-          </div>
-        )}
-
-        {onCloseStudy && (
-          <button
-            onClick={onCloseStudy}
-            className="flex flex-col items-center justify-center gap-1.5 w-[110px] rounded-xl font-bold transition-all hover:brightness-110 hover:-translate-y-0.5 cursor-pointer shrink-0"
-            style={{ backgroundColor: "oklch(0.65 0.20 20 / 0.1)", color: "oklch(0.65 0.20 20)", border: "1px solid oklch(0.65 0.20 20 / 0.2)" }}
-            title="Cerrar estudio actual"
-          >
-            <X className="w-5 h-5 mb-0.5" />
-            <span className="text-[10px] font-bold uppercase tracking-widest leading-[1.1] text-center">Cerrar<br/>Estudio</span>
-          </button>
+        {procTime !== null && (
+          <MetricCell
+            Icon={Cpu}
+            label="Tiempo Inferencia"
+            value={procTime.toFixed(1)}
+            unit="s"
+            sub="Procesamiento IA"
+            color="oklch(0.65 0.16 280)"
+            bg="oklch(0.65 0.16 280 / 0.12)"
+            tooltip="Tiempo neto empleado por la IA en procesar la inferencia de las imágenes."
+          />
         )}
       </div>
+
     </div>
   );
 }
