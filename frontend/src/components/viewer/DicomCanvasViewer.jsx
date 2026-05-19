@@ -518,7 +518,11 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
   useEffect(() => {
     const observers = [
       { ref: axialRef, render: () => {
-        if (status==="ready"&&slices.length) renderAxial(axialRef.current, slices[sliceIdx], wc, ww, zoom, pan, getSegSlice(), showSeg&&segLoaded);
+        if (status==="ready"&&slices.length) {
+          const t = renderAxial(axialRef.current, slices[sliceIdx], wc, ww, zoom, pan, getSegSlice(), showSeg&&segLoaded);
+          axialTransform.current = t;
+          drawAxialCrosshairs(axialRef.current, t, coronalY, sagittalX);
+        }
       }},
       { ref: coronalRef, render: () => {
         if (status==="ready"&&slices.length) { const t=renderCoronal(coronalRef.current, slices, coronalY, wc, ww, showSeg&&segLoaded?segData:null, showSeg&&segLoaded, sliceIdx, spacingScale, sagittalX); coronalTransform.current=t; }
@@ -812,7 +816,8 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
               </div>
               {/* Minimap strip */}
               <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2 px-3 py-2"
-                style={{ backgroundColor:"rgba(0,0,0,0.75)", borderTop:"1px solid oklch(0.25 0 0)" }}>
+                style={{ backgroundColor:"rgba(0,0,0,0.75)", borderTop:"1px solid oklch(0.25 0 0)" }}
+                onClick={e => e.stopPropagation()}>
                 <button onClick={()=>setSliceIdx(i=>Math.max(0,i-1))} className="p-1.5 rounded-lg bg-white/5 hover:bg-white/20 transition-colors text-white/90 hover:text-white"
                   title="Corte anterior"><ChevronLeft className="w-4 h-4"/></button>
                 <div className="relative flex-1 h-8 rounded-md overflow-hidden" style={{ backgroundColor:"rgba(255,255,255,0.1)" }}>
@@ -859,7 +864,8 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
           </div>
           {status==="ready" && (
             <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2 px-3 py-2"
-              style={{ backgroundColor:"rgba(0,0,0,0.75)", borderTop:"1px solid oklch(0.25 0 0)" }}>
+              style={{ backgroundColor:"rgba(0,0,0,0.75)", borderTop:"1px solid oklch(0.25 0 0)" }}
+              onClick={e => e.stopPropagation()}>
               <button onClick={()=>setCoronalY(y=>Math.max(0,y-4))} className="p-1.5 rounded-lg bg-white/5 hover:bg-white/20 transition-colors text-white/90 hover:text-white" title="Desplazar plano"><ChevronLeft className="w-4 h-4"/></button>
               <div className="relative flex-1 h-8 rounded-md overflow-hidden" style={{backgroundColor:"rgba(255,255,255,0.1)"}}>
                 {(() => {
@@ -906,7 +912,8 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
           </div>
           {status==="ready" && (
             <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2 px-3 py-2"
-              style={{ backgroundColor:"rgba(0,0,0,0.75)", borderTop:"1px solid oklch(0.25 0 0)" }}>
+              style={{ backgroundColor:"rgba(0,0,0,0.75)", borderTop:"1px solid oklch(0.25 0 0)" }}
+              onClick={e => e.stopPropagation()}>
               <button onClick={()=>setSagittalX(x=>Math.max(0,x-4))} className="p-1.5 rounded-lg bg-white/5 hover:bg-white/20 transition-colors text-white/90 hover:text-white" title="Desplazar plano"><ChevronLeft className="w-4 h-4"/></button>
               <div className="relative flex-1 h-8 rounded-md overflow-hidden" style={{backgroundColor:"rgba(255,255,255,0.1)"}}>
                 {(() => {
