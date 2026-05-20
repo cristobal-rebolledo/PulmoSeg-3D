@@ -133,6 +133,10 @@ def _update_progress(
     db, job: SegmentationJob, progress: int, message: str
 ) -> None:
     """Helper para actualizar el progreso del Job en la DB."""
+    db.refresh(job)
+    if job.status == "CANCELLED":
+        raise RuntimeError("__CANCELLED__")
+
     job.progress_percentage = progress
     job.updated_at = datetime.now(timezone.utc)
     db.commit()
@@ -146,8 +150,10 @@ def _check_cancelled(db, job_id: str) -> None:
     job = db.query(SegmentationJob).filter(
         SegmentationJob.job_id == job_id
     ).first()
-    if job and job.status == "CANCELLED":
-        raise RuntimeError("__CANCELLED__")
+    if job:
+        db.refresh(job)
+        if job.status == "CANCELLED":
+            raise RuntimeError("__CANCELLED__")
 
 
 
