@@ -6,7 +6,7 @@ import ResultsDashboard from "@/components/results/ResultsDashboard";
 import HistoryView from "@/components/views/HistoryView";
 import SettingsView from "@/components/views/SettingsView";
 import DicomUploader from "@/components/upload/DicomUploader";
-import { createSegmentationJob, cancelJob, getJobStatus } from "@/api/client";
+import { createSegmentationJob, cancelJob, getJobStatus, deleteJob } from "@/api/client";
 import { clearViewerCache } from "@/components/viewer/DicomCanvasViewer";
 
 /**
@@ -119,22 +119,35 @@ export default function App() {
         );
 
         // Acumular todas las actualizaciones antes de hacer setState
-        const statusUpdates = {}; // { jobId: { status, progress } }
+        const statusUpdates = {}; // { jobId: { status, progress, errorMessage } }
         const completions   = []; // jobs que llegaron a COMPLETED
+        const toDelete      = []; // jobs que fallaron por Early Validation
 
         results.forEach((result) => {
           if (result.status !== "fulfilled") return;
           const { jobId, data } = result.value;
           const apiStatus   = data?.job_info?.status || "UNKNOWN";
           const apiProgress = data?.job_info?.progress_percentage ?? 0;
-          statusUpdates[jobId] = { status: apiStatus, progress: apiProgress };
+          const apiError    = data?.error_message || null;
+          
+          if (apiStatus === "FAILED" && apiError && apiError.includes("DICOM válido")) {
+            toDelete.push(jobId);
+            setSubmitError(apiError);
+            setTimeout(() => setSubmitError(null), 8000); // 8 seconds toast
+            deleteJob(jobId).catch((err) => console.error("Error deleting invalid job", err));
+            return; // no actualizar estado, lo vamos a borrar
+          }
+
+          statusUpdates[jobId] = { status: apiStatus, progress: apiProgress, errorMessage: apiError };
           if (apiStatus === "COMPLETED") completions.push({ jobId, data });
         });
 
         // Una sola llamada a setJobs → un solo re-render por tick
-        if (Object.keys(statusUpdates).length > 0) {
+        if (Object.keys(statusUpdates).length > 0 || toDelete.length > 0) {
           setJobs((prev) =>
-            prev.map((j) => statusUpdates[j.id] ? { ...j, ...statusUpdates[j.id] } : j)
+            prev
+              .map((j) => statusUpdates[j.id] ? { ...j, ...statusUpdates[j.id] } : j)
+              .filter((j) => !toDelete.includes(j.id)) // Borrar los inválidos
           );
         }
 
@@ -356,16 +369,34 @@ export default function App() {
           {/* Submit error toast */}
           {submitError && activeView === "viewer" && (
             <div
-              className="absolute bottom-6 left-1/2 -translate-x-1/2 glass-card px-5 py-3 border animate-[fade-in_0.3s_ease-out]"
+              className="absolute bottom-8 right-8 glass-card px-5 py-4 border rounded-xl shadow-2xl flex items-start gap-3 animate-[fade-in_0.3s_ease-out]"
               style={{
                 borderColor: "oklch(0.65 0.20 20 / 0.4)",
-                backgroundColor: "oklch(0.65 0.20 20 / 0.08)",
-                zIndex: 50,
+                backgroundColor: "oklch(0.65 0.20 20 / 0.12)",
+                zIndex: 60,
+                maxWidth: "400px"
               }}
             >
-              <p className="text-sm" style={{ color: "oklch(0.65 0.20 20)" }}>
-                ❌ Error: {submitError}
-              </p>
+              <div className="mt-0.5 shrink-0">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="oklch(0.65 0.20 20)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="15" y1="9" x2="9" y2="15"></line>
+                  <line x1="9" y1="9" x2="15" y2="15"></line>
+                </svg>
+              </div>
+              <div className="flex-1">
+                <h4 className="text-sm font-bold mb-0.5" style={{ color: "oklch(0.65 0.20 20)" }}>Error de Validación</h4>
+                <p className="text-[13px] font-medium leading-snug" style={{ color: "oklch(0.65 0.20 20 / 0.85)" }}>
+                  {submitError}
+                </p>
+              </div>
+              <button 
+                onClick={() => setSubmitError(null)}
+                className="opacity-60 hover:opacity-100 transition-opacity p-1 -mt-1 -mr-2 rounded-lg shrink-0"
+                style={{ color: "oklch(0.65 0.20 20)" }}
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
           )}
         </div>

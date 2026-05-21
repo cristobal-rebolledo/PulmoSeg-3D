@@ -53,6 +53,7 @@ function StudyItem({ job, isActive, onSelect, queuePosition, onCancel }) {
   const isProcessing  = job.status === "PROCESSING";
   const isQueued      = job.status === "QUEUED";
   const isUploading   = job.status === "UPLOADING";
+  const isFailed      = job.status === "FAILED";
   const isCancellable = isQueued || isProcessing; // No se puede cancelar en frontend puro la subida fácilmente
 
   const badgeLabel = isProcessing ? `${job.progress ?? 0}%` : cfg.badge;
@@ -66,6 +67,8 @@ function StudyItem({ job, isActive, onSelect, queuePosition, onCancel }) {
     subtitle = `En cola · posición ${queuePosition}`;
   } else if (isUploading) {
     subtitle = `Transfiriendo archivos...`;
+  } else if (isFailed && job.errorMessage) {
+    subtitle = job.errorMessage;
   }
 
   const handleCancelClick = (e) => {
