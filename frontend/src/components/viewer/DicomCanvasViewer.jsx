@@ -21,12 +21,14 @@ async function fetchDicom(url) {
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${url}`);
   const buf = await res.arrayBuffer();
   const ds = dicomParser.parseDicom(new Uint8Array(buf));
-  const rows = parseInt(ds.string("x00280010")) || 512;
-  const cols = parseInt(ds.string("x00280011")) || 512;
-  const slope = parseFloat(ds.string("x00281053")) || 1;
-  const inter = parseFloat(ds.string("x00281052")) || -1024;
-  const bits  = parseInt(ds.string("x00280100")) || 16;
-  const rep   = parseInt(ds.string("x00280103")) || 0;
+  const rows = ds.uint16("x00280010") ?? 512;
+  const cols = ds.uint16("x00280011") ?? 512;
+  const slopeStr = ds.string("x00281053");
+  const interStr = ds.string("x00281052");
+  const slope = slopeStr !== undefined ? parseFloat(slopeStr) : 1;
+  const inter = interStr !== undefined ? parseFloat(interStr) : -1024;
+  const bits  = ds.uint16("x00280100") ?? 16;
+  const rep   = ds.uint16("x00280103") ?? 0;
   // ── Spacing metadata for anisotropy correction ──────────────────────────
   // PixelSpacing (0028,0030): "rowSpacing\colSpacing" — we use the in-plane spacing
   const psRaw = ds.string("x00280030");

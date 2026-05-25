@@ -9,40 +9,36 @@ export default function DicomUploader({ onSubmit, isSubmitting = false, onClose 
   const [patientId, setPatientId] = useState("");
   const [studyUid, setStudyUid] = useState("");
   const [seriesUid, setSeriesUid] = useState("");
-  const inputRef = useRef(null);
+  const folderInputRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const processFiles = useCallback((fileList) => {
     const allFiles = Array.from(fileList);
+    const zipFiles = allFiles.filter(f => f.name.toLowerCase().endsWith(".zip"));
+    
+    if (zipFiles.length > 0) {
+      const zipFile = zipFiles[0];
+      const baseName = zipFile.name.replace(/\.zip$/i, "");
+      setSelectedFolder(baseName);
+      setDcmFiles([zipFile]);
+      if (!patientId) setPatientId(baseName);
+      return;
+    }
+
     const dicomFiles = allFiles.filter(
       (f) => f.name.toLowerCase().endsWith(".dcm") || f.name.toLowerCase().endsWith(".dicom")
     );
-    if (allFiles.length === 0) return;
-    const firstPath = allFiles[0]?.webkitRelativePath || "";
+    if (dicomFiles.length === 0) return;
+    const firstPath = dicomFiles[0]?.webkitRelativePath || allFiles[0]?.webkitRelativePath || "";
     const segments = firstPath.split("/");
-    // Estructura esperada: patient/study/series/file.dcm (4 niveles)
-    // o: patient/study/file.dcm (3 niveles) si no hay carpeta de serie
     const topFolder = segments[0] || "";
     const secondFolder = segments.length > 2 ? segments[1] : "";
     const thirdFolder = segments.length > 3 ? segments[2] : "";
-    const looksLikeUID = (s) => /^\d[\d.]+\d$/.test(s);
-    let detectedPatient = "";
-    let detectedStudy = "";
-    let detectedSeries = "";
-    if (looksLikeUID(topFolder)) {
-      detectedPatient = "";
-      detectedStudy = topFolder;
-      detectedSeries = looksLikeUID(secondFolder) ? secondFolder : "";
-    } else {
-      detectedPatient = topFolder;
-      detectedStudy = looksLikeUID(secondFolder) ? secondFolder : "";
-      detectedSeries = looksLikeUID(thirdFolder) ? thirdFolder : "";
-    }
+    
     setSelectedFolder(topFolder);
     setDcmFiles(dicomFiles);
-    if (!patientId && detectedPatient) setPatientId(detectedPatient);
-    if (!studyUid && detectedStudy) setStudyUid(detectedStudy);
-    if (!seriesUid && detectedSeries) setSeriesUid(detectedSeries);
-  }, [patientId, studyUid, seriesUid]);
+    if (!patientId) setPatientId(topFolder);
+  }, [patientId]);
 
 
   const handleDragOver = useCallback((e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); }, []);
@@ -128,7 +124,7 @@ export default function DicomUploader({ onSubmit, isSubmitting = false, onClose 
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
-          onClick={() => inputRef.current?.click()}
+          onClick={() => fileInputRef.current?.click()}
         >
           {isDragging && (
             <div
@@ -143,19 +139,24 @@ export default function DicomUploader({ onSubmit, isSubmitting = false, onClose 
             <FolderOpen className="w-12 h-12" style={{ color: "var(--text-accent)" }} />
           </div>
           <p className="text-2xl font-bold mb-3" style={{ color: "var(--text-primary)" }}>
-            {isDragging ? "Suelta la carpeta aquí" : "Arrastra tu carpeta DICOM"}
+            {isDragging ? "Suelta la carpeta o archivo ZIP aquí" : "Arrastra tu carpeta DICOM o archivo .ZIP"}
           </p>
           <p className="text-base" style={{ color: "var(--text-muted)" }}>
-            o haz clic para buscar archivos <span className="font-semibold" style={{ color: "var(--text-accent)" }}>DICOM</span>
+            haz clic para buscar <span className="font-semibold" style={{ color: "var(--text-accent)" }}>archivos ZIP o DICOM</span>
+          </p>
+          <p className="text-sm mt-2" style={{ color: "var(--text-muted)" }}>
+            o <button type="button" onClick={(e) => { e.stopPropagation(); folderInputRef.current?.click(); }} className="font-semibold hover:underline" style={{ color: "var(--text-accent)" }}>seleccionar una carpeta entera</button>
           </p>
           <p
             className="text-sm font-medium mt-6 px-8 py-3 rounded-full border"
             style={{ borderColor: "var(--border-subtle)", color: "var(--text-muted)", backgroundColor: "var(--bg-input)" }}
           >
-            Formatos soportados: <strong>.dcm</strong> · <strong>.dicom</strong>
+            Formatos soportados: <strong>.dcm</strong> · <strong>.dicom</strong> · <strong>.zip</strong>
           </p>
-          <input ref={inputRef} type="file" className="hidden" onChange={handleInputChange}
+          <input ref={folderInputRef} type="file" className="hidden" onChange={handleInputChange}
             /* @ts-ignore */ webkitdirectory="" directory="" multiple />
+          <input ref={fileInputRef} type="file" className="hidden" onChange={handleInputChange}
+            multiple accept=".zip,.dcm,.dicom" />
         </div>
       ) : (
         <div className="flex flex-col gap-8 mt-2">
@@ -168,7 +169,7 @@ export default function DicomUploader({ onSubmit, isSubmitting = false, onClose 
                 <div>
                   <p className="text-lg font-bold" style={{ color: "var(--text-primary)" }}>{selectedFolder}</p>
                   <p className="text-sm mt-1 font-medium" style={{ color: "var(--text-muted)" }}>
-                    <FileText className="w-4 h-4 inline mr-1.5" />{dcmFiles.length} archivos .dcm detectados
+                    <FileText className="w-4 h-4 inline mr-1.5" />{dcmFiles.length} archivo(s) detectado(s)
                   </p>
                 </div>
               </div>

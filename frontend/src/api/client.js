@@ -192,6 +192,14 @@ export async function cancelJob(jobId) {
 }
 
 /**
+ * DELETE /jobs/{job_id} — Deletes a job entirely from the database.
+ * Used for cleaning up invalid uploads.
+ */
+export async function deleteJob(jobId) {
+  return request(`/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" });
+}
+
+/**
  * GET /jobs — Lista paginada del historial de trabajos de segmentación.
  *
  * Soporta búsqueda por patient_pseudo_id y paginación con skip/limit.

@@ -314,16 +314,35 @@ async def create_segmentation_job(
     total_bytes = 0
 
     try:
-        for upload_file in files:
-            # Usar solo el nombre del archivo (sin ruta relativa del directorio)
-            filename = Path(upload_file.filename).name if upload_file.filename else f"file_{saved_count}.dcm"
-            file_path = temp_dicom_dir / filename
+        import zipfile
+        import io
 
+        for upload_file in files:
+            filename = Path(upload_file.filename).name if upload_file.filename else f"file_{saved_count}.dcm"
+            
             content = await upload_file.read()
-            with open(file_path, "wb") as out_file:
-                out_file.write(content)
             total_bytes += len(content)
-            saved_count += 1
+
+            if filename.lower().endswith(".zip"):
+                # Si es un ZIP, extraer todo su contenido en temp_dicom_dir
+                try:
+                    with zipfile.ZipFile(io.BytesIO(content)) as zip_ref:
+                        zip_ref.extractall(temp_dicom_dir)
+                    # Contar los archivos DICOM reales extraídos
+                    extracted_dcms = list(temp_dicom_dir.rglob("*.dcm"))
+                    if not extracted_dcms:
+                        # Fallback por si los archivos no tienen extensión
+                        extracted_dcms = [f for f in temp_dicom_dir.rglob("*") if f.is_file() and not f.name.endswith(".zip")]
+                    saved_count += len(extracted_dcms)
+                except zipfile.BadZipFile:
+                    logger.error(f"[{job_id}] El archivo {filename} no es un ZIP válido.")
+                    raise HTTPException(status_code=400, detail="El archivo ZIP proporcionado está corrupto o es inválido.")
+            else:
+                # Si es un archivo DICOM normal, guardarlo directamente
+                file_path = temp_dicom_dir / filename
+                with open(file_path, "wb") as out_file:
+                    out_file.write(content)
+                saved_count += 1
 
         logger.info(
             f"[{job_id}] {saved_count} archivos DICOM guardados en {temp_dicom_dir} "
@@ -698,16 +717,17 @@ async def serve_dicom_file(
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Nombre de archivo inválido.")
 
-    dicom_path = LOCAL_STORAGE_BASE / "inputs" / f"temp_{job_id}" / filename
-
-    if not dicom_path.exists() or not dicom_path.is_file():
+    base_path = LOCAL_STORAGE_BASE / "inputs" / f"temp_{job_id}"
+    matches = list(base_path.rglob(filename))
+    
+    if not matches or not matches[0].is_file():
         raise HTTPException(
             status_code=404,
             detail=f"Archivo DICOM no encontrado: {filename}",
         )
 
     return FileResponse(
-        path=str(dicom_path),
+        str(matches[0]),
         media_type="application/dicom",
         filename=filename,
     )
@@ -951,6 +971,24 @@ def list_jobs(
         ))
 
     return JobListResponse(total=total, jobs=entries)
+
+
+# ===========================================================================
+# Endpoint: DELETE /jobs/{job_id}
+# ===========================================================================
+@app.delete(
+    "/jobs/{job_id}",
+    summary="Eliminar un Job",
+    description="Elimina de forma lógica (o física) un job de la base de datos para que no aparezca en el historial.",
+)
+def delete_job(job_id: str, db: Session = Depends(get_db)):
+    job = db.query(SegmentationJob).filter(SegmentationJob.job_id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    db.delete(job)
+    db.commit()
+    return {"status": "deleted", "job_id": job_id}
 
 
 # ===========================================================================

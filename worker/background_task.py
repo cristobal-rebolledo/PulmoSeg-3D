@@ -34,6 +34,22 @@ logger = logging.getLogger("pulmoseg.worker")
 # Ruta base de almacenamiento local (simula buckets GCS)
 LOCAL_STORAGE_BASE = Path("local_storage")
 
+def _is_valid_dicom(file_path: Path) -> bool:
+    """Valida rápidamente si un archivo es DICOM comprobando el prefijo DICM o parseando la cabecera."""
+    try:
+        with open(file_path, "rb") as f:
+            f.seek(128)
+            if f.read(4) == b"DICM":
+                return True
+    except Exception:
+        pass
+
+    try:
+        import pydicom
+        pydicom.dcmread(str(file_path), stop_before_pixels=True)
+        return True
+    except Exception:
+        return False
 
 def _resolve_dicom_directory(request_data: dict) -> Path:
     """
@@ -133,6 +149,10 @@ def _update_progress(
     db, job: SegmentationJob, progress: int, message: str
 ) -> None:
     """Helper para actualizar el progreso del Job en la DB."""
+    db.refresh(job)
+    if job.status == "CANCELLED":
+        raise RuntimeError("__CANCELLED__")
+
     job.progress_percentage = progress
     job.updated_at = datetime.now(timezone.utc)
     db.commit()
@@ -146,8 +166,10 @@ def _check_cancelled(db, job_id: str) -> None:
     job = db.query(SegmentationJob).filter(
         SegmentationJob.job_id == job_id
     ).first()
-    if job and job.status == "CANCELLED":
-        raise RuntimeError("__CANCELLED__")
+    if job:
+        db.refresh(job)
+        if job.status == "CANCELLED":
+            raise RuntimeError("__CANCELLED__")
 
 
 
@@ -229,11 +251,36 @@ def run_segmentation_job(
                 f"({resolved_nifti_path.stat().st_size / (1024*1024):.1f} MB)"
             )
         elif dicom_dir:
-            # Multipart upload: la ruta viene directa del endpoint
-            resolved_dicom_dir = Path(dicom_dir)
+            # Multipart upload o ZIP extraído: la ruta base viene del endpoint.
+            # Como un ZIP puede tener carpetas anidadas, buscamos recursivamente
+            # el subdirectorio que contenga los archivos .dcm.
+            base_dir = Path(dicom_dir)
+            all_dcms = list(base_dir.rglob("*.dcm"))
+            if not all_dcms:
+                all_dcms = [f for f in base_dir.rglob("*") if f.is_file() and not f.name.endswith(".zip")]
+            
+            if all_dcms:
+                # Agrupar por directorio padre y elegir el más poblado
+                dirs_found = {}
+                for f in all_dcms:
+                    dirs_found[f.parent] = dirs_found.get(f.parent, 0) + 1
+                resolved_dicom_dir = max(dirs_found, key=dirs_found.__getitem__)
+                
+                # Validar rápidamente que haya al menos un DICOM real (Early Validation)
+                valid_dicom_found = False
+                for f in all_dcms[:5]:
+                    if _is_valid_dicom(f):
+                        valid_dicom_found = True
+                        break
+                
+                if not valid_dicom_found:
+                    raise ValueError("El archivo subido no contiene un estudio DICOM válido.")
+            else:
+                resolved_dicom_dir = base_dir
+                
             logger.info(
-                f"[{job_id}] DICOM dir recibido vía upload: {resolved_dicom_dir} "
-                f"({len(list(resolved_dicom_dir.glob('*.dcm')))} archivos .dcm)"
+                f"[{job_id}] DICOM dir resuelto vía upload/ZIP: {resolved_dicom_dir} "
+                f"({len(list(resolved_dicom_dir.glob('*')))} archivos)"
             )
         else:
             # Fallback: resolver desde metadatos del request (compatibilidad)
@@ -255,9 +302,12 @@ def run_segmentation_job(
         # Inyectar dicom_image_ids en artifacts para que DicomCanvasViewer
         # (visor MPR en HTML Canvas) pueda cargar los slices DICOM directamente
         # desde el backend sin re-subir los archivos.
-        if isinstance(result, dict) and dicom_dir:
-            dicom_path = Path(dicom_dir)
-            dcm_files = sorted(dicom_path.glob("*.dcm"))
+        if isinstance(result, dict) and resolved_dicom_dir:
+            dicom_path = Path(resolved_dicom_dir)
+            dcm_files = list(dicom_path.rglob("*.dcm"))
+            if not dcm_files:
+                dcm_files = [f for f in dicom_path.rglob("*") if f.is_file() and not f.name.endswith(".zip")]
+            dcm_files = sorted(dcm_files)
             if dcm_files:
                 dicom_image_ids = [
                     f"/dicom/{job_id}/{f.name}" for f in dcm_files

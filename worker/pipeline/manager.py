@@ -165,6 +165,8 @@ def run_inference_pipeline(
                     f"convert_dicom_to_nifti retornó path vacío o inexistente: {_volume_nifti_path}"
                 )
         except Exception as _conv_err:
+            if str(_conv_err) == "__CANCELLED__":
+                raise
             logger.error(
                 f"[{job_id}] ❌ Error crítico en conversión DICOM→NIfTI: {_conv_err}",
                 exc_info=True,
@@ -246,6 +248,8 @@ def run_inference_pipeline(
                     f"rango=[{img_tensor.min():.3f}, {img_tensor.max():.3f}]"
                 )
             except Exception as e_monai:
+                if str(e_monai) == "__CANCELLED__":
+                    raise
                 logger.warning(
                     f"[{job_id}] Preprocesamiento MONAI falló: {e_monai} "
                     f"— intentando carga directa con SimpleITK.",
@@ -281,6 +285,8 @@ def run_inference_pipeline(
                 _report(40, f"Carga manual completada — shape={list(img_tensor.shape)}")
 
             except Exception as e_sitk:
+                if str(e_sitk) == "__CANCELLED__":
+                    raise
                 logger.error(
                     f"[{job_id}] Intento B (carga manual) también falló: {e_sitk}",
                     exc_info=True,
