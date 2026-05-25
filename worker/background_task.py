@@ -51,7 +51,6 @@ def _is_valid_dicom(file_path: Path) -> bool:
     except Exception:
         return False
 
-
 def _resolve_dicom_directory(request_data: dict) -> Path:
     """
     Resuelve la ruta al directorio DICOM a partir del payload del request.

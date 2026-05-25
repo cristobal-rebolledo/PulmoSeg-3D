@@ -367,35 +367,34 @@ export default function App() {
           )}
 
           {/* Submit error toast */}
-          {submitError && activeView === "viewer" && (
+          {submitError && (
             <div
-              className="absolute bottom-8 right-8 glass-card px-5 py-4 border rounded-xl shadow-2xl flex items-start gap-3 animate-[fade-in_0.3s_ease-out]"
+              className="absolute top-6 left-1/2 -translate-x-1/2 px-5 py-4 rounded-xl shadow-2xl flex items-center gap-3 animate-[fade-in_0.3s_ease-out]"
               style={{
-                borderColor: "oklch(0.65 0.20 20 / 0.4)",
-                backgroundColor: "oklch(0.65 0.20 20 / 0.12)",
-                zIndex: 60,
-                maxWidth: "400px"
+                backgroundColor: "oklch(0.65 0.20 20)",
+                color: "white",
+                zIndex: 9999,
+                maxWidth: "450px",
+                width: "max-content"
               }}
             >
-              <div className="mt-0.5 shrink-0">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="oklch(0.65 0.20 20)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <div className="shrink-0">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="10"></circle>
                   <line x1="15" y1="9" x2="9" y2="15"></line>
                   <line x1="9" y1="9" x2="15" y2="15"></line>
                 </svg>
               </div>
               <div className="flex-1">
-                <h4 className="text-sm font-bold mb-0.5" style={{ color: "oklch(0.65 0.20 20)" }}>Error de Validación</h4>
-                <p className="text-[13px] font-medium leading-snug" style={{ color: "oklch(0.65 0.20 20 / 0.85)" }}>
+                <p className="text-[14px] font-bold leading-snug">
                   {submitError}
                 </p>
               </div>
               <button 
                 onClick={() => setSubmitError(null)}
-                className="opacity-60 hover:opacity-100 transition-opacity p-1 -mt-1 -mr-2 rounded-lg shrink-0"
-                style={{ color: "oklch(0.65 0.20 20)" }}
+                className="opacity-80 hover:opacity-100 transition-opacity p-1 ml-1 rounded-lg shrink-0"
               >
-                <X className="w-4 h-4" />
+                <X className="w-5 h-5" />
               </button>
             </div>
           )}
