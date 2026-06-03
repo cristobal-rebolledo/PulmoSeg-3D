@@ -16,8 +16,10 @@
  */
 
 // Base URL for API requests.
-// Vite proxy rewrites /api/* → http://127.0.0.1:8000/*
-const API_BASE = "/api";
+// - Development (Vite proxy):   /api  → rewrites to http://127.0.0.1:8000/*
+// - Docker (Nginx proxy):       /api  → rewrites to http://backend:8000/*
+// - Production (Firebase):      VITE_API_BASE_URL = https://pulmoseg-backend-xxxx-uc.a.run.app
+export const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 
 /**
  * API Key for protected endpoints (DICOM / NIfTI file serving).
@@ -93,6 +95,15 @@ async function request(endpoint, options = {}) {
  */
 export async function checkHealth() {
   return request("/health");
+}
+
+/**
+ * GET /config — Obtiene la configuración activa del modelo desde el backend.
+ *
+ * @returns {Promise<object>} Objeto con los parámetros (name, network_type, etc.)
+ */
+export async function getConfig() {
+  return request("/config");
 }
 
 /**

@@ -63,6 +63,18 @@ def load_model(
                 num_res_units=config.num_res_units,
                 norm=config.norm,
             )
+        elif config.network_type == "SegResNetDS":
+            from monai.networks.nets import SegResNetDS
+            norm_val = "instance" if "instance" in config.norm.lower() else config.norm
+            model = SegResNetDS(
+                spatial_dims=config.spatial_dims,
+                in_channels=config.in_channels,
+                out_channels=config.out_channels,
+                init_filters=config.channels[0] if config.channels else 32,
+                blocks_down=[1, 2, 2, 4, 4],
+                norm=norm_val,
+                dsdepth=4,
+            )
         else:
             # Punto de extensión para SegResNet u otras arquitecturas futuras
             raise ValueError(
@@ -99,7 +111,7 @@ def load_model(
                 f"({len(state_dict)} parámetros)"
             )
 
-        model.load_state_dict(state_dict)
+        model.load_state_dict(state_dict, strict=False)
         logger.info(f"Pesos cargados desde: {weights_path}")
 
         # --- 3. Preparar para inferencia ---

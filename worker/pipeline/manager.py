@@ -18,6 +18,7 @@ Diseño de robustez (graceful fallback):
 
 import hashlib
 import logging
+import os
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -40,6 +41,10 @@ logger = logging.getLogger("pulmoseg.pipeline.manager")
 
 # Ruta base de almacenamiento local
 LOCAL_STORAGE_BASE = Path("local_storage")
+
+# Detectar si estamos en GCP (Cloud Run)
+# Si GCS_BUCKET_OUTPUTS está definido, activar integración con GCS.
+_GCS_ENABLED = bool(os.environ.get("GCS_BUCKET_OUTPUTS", ""))
 
 
 def run_inference_pipeline(
@@ -81,7 +86,7 @@ def run_inference_pipeline(
           - "clinical_results": métricas clínicas calculadas desde la máscara.
           - "artifacts": rutas a los archivos generados (mask, uncertainty, etc.).
     """
-    logger.info(f"[{job_id}] Iniciando pipeline de inferencia...")
+    logger.info(f"[{job_id}] Iniciando pipeline de inferencia (GCS={'activo' if _GCS_ENABLED else 'desactivado'})...")
 
     def _report(pct: int, msg: str) -> None:
         """Reporta progreso si hay callback disponible."""
@@ -100,6 +105,32 @@ def run_inference_pipeline(
     # =========================================================================
     config = get_active_config()
     _report(5, f"Modelo configurado: {config.name}")
+
+    # =========================================================================
+    # PASO 2b — Garantizar que los pesos del modelo estén disponibles localmente
+    # =========================================================================
+    # En Cloud Run, el filesystem es efímero: los pesos no existen al arrancar.
+    # gcs_utils.ensure_model_local los descarga desde GCS si no están en caché.
+    if _GCS_ENABLED and not config.weights_path.exists():
+        _report(6, "Descargando pesos del modelo desde Cloud Storage...")
+        try:
+            from worker.gcs_utils import ensure_model_local, GCS_BUCKET_MODELS
+            # El blob_name es la ruta relativa del modelo dentro del bucket
+            # (ej: "spleen_ct_segmentation/model.pt")
+            _model_blob = str(config.weights_path).replace("\\", "/").split("models/", 1)[-1]
+            ensure_model_local(
+                model_blob_name=_model_blob,
+                local_path=config.weights_path,
+            )
+            _report(10, f"Pesos descargados desde gs://{GCS_BUCKET_MODELS}/{_model_blob}")
+        except Exception as _e_gcs_model:
+            logger.error(
+                f"[{job_id}] Error descargando pesos desde GCS: {_e_gcs_model}",
+                exc_info=True,
+            )
+            raise RuntimeError(
+                f"No se pudieron obtener los pesos del modelo desde GCS: {_e_gcs_model}"
+            )
 
     # ── CHECKPOINT A: Verificación de inputs y pesos del modelo ──────────────
     logger.info(f"[{job_id}] ── CHECKPOINT A: Verificación de entradas ──")
@@ -442,17 +473,38 @@ def run_inference_pipeline(
     _report(90, "Construyendo resultado final...")
 
     # =========================================================================
-    # PASO 8 — Construir y retornar resultados
+    # PASO 8 — Subir outputs a GCS (solo en Cloud Run)
+    # =========================================================================
+    _gcs_output_uris: dict[str, str] = {}
+    if _GCS_ENABLED:
+        _report(92, "Subiendo resultados a Cloud Storage...")
+        try:
+            from worker.gcs_utils import upload_outputs
+            _gcs_output_uris = upload_outputs(job_id, output_dir)
+            logger.info(f"[{job_id}] Outputs subidos a GCS: {list(_gcs_output_uris.keys())}")
+        except Exception as _e_upload:
+            logger.warning(
+                f"[{job_id}] No se pudieron subir outputs a GCS: {_e_upload} "
+                "(los archivos locales siguen disponibles)"
+            )
+
+    # =========================================================================
+    # PASO 9 — Construir y retornar resultados
     # =========================================================================
     artifacts = get_mock_artifacts(job_id)
 
     mask_file = output_dir / "mask.nii.gz"
     if mask_file.exists():
-        artifacts["segmentation_mask_nifti_url"] = str(mask_file)
+        # En GCP, usar la URI de GCS; en local, usar la ruta del filesystem
+        artifacts["segmentation_mask_nifti_url"] = (
+            _gcs_output_uris.get("mask.nii.gz", str(mask_file))
+        )
 
     uncertainty_file = output_dir / "uncertainty.nii.gz"
     if uncertainty_file.exists():
-        artifacts["uncertainty_map_url"] = str(uncertainty_file)
+        artifacts["uncertainty_map_url"] = (
+            _gcs_output_uris.get("uncertainty.nii.gz", str(uncertainty_file))
+        )
 
     # Listar archivos generados para diagnóstico
     output_files = [f.name for f in output_dir.iterdir() if f.is_file()]

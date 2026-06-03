@@ -57,24 +57,26 @@ def get_mock_artifacts(job_id: str) -> dict:
     }
 
 
-def get_mock_worker_details() -> dict:
+def get_worker_details() -> dict:
     """
-    Retorna detalles simulados del worker que procesó el Job.
-
-    Basado en: Diseño/SegmentationJob_Document.json → worker_details
-    Adaptado al entorno local: instance_id refleja ejecución local en CPU.
-
-    Returns:
-        dict con instance_id, model_hash y frameworks.
+    Retorna detalles del worker que procesó el Job, detectando el hardware real.
     """
+    import torch
+    
+    if torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_name(0).replace(" ", "-").lower()
+        instance_id = f"cloud-run-gpu-{gpu_name}"
+    else:
+        instance_id = "cloud-run-cpu-worker"
+        
     return {
-        "instance_id": "local-cpu-worker-dev",
+        "instance_id": instance_id,
         "model_hash": (
             "sha256:e3b0c44298fc1c149afbf4c8996fb924"
             "27ae41e4649b934ca495991b7852b855"
         ),
         "frameworks": {
             "monai": "1.3.2",
-            "torch": "2.2.0+cu118",
+            "torch": "2.2.0" + ("+cu118" if torch.cuda.is_available() else "+cpu"),
         },
     }

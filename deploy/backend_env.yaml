@@ -1,0 +1,5 @@
+CORS_ORIGINS: "https://pulmoseg-frontend-827425626938.us-central1.run.app,http://localhost:5173,http://127.0.0.1:5173"
+GCS_BUCKET_INPUTS: "pulmoseg-inputs"
+GCS_BUCKET_OUTPUTS: "pulmoseg-outputs"
+GCS_BUCKET_MODELS: "pulmoseg-models"
+MONAI_DATA_DIRECTORY: "/tmp/models"

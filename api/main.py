@@ -1,5 +1,5 @@
 """
-main.py — Entrypoint FastAPI para PulmoSeg 3D (Entorno de Desarrollo Local).
+main.py — Entrypoint FastAPI para PulmoSeg 3D (Entorno de Producción en GCP / Cloud Run).
 
 Endpoints implementados:
   POST /segment              → Crea un Job de segmentación (HTTP 202 Accepted)
@@ -55,6 +55,7 @@ from api.schemas import (
     VolumetricData,
 )
 from worker.background_task import run_segmentation_job
+from worker.model_config import get_active_config
 
 # ---------------------------------------------------------------------------
 # Cargar variables de entorno desde .env
@@ -186,17 +187,21 @@ async def lifespan(app: FastAPI):
     Lifespan de FastAPI.
 
     Startup:
-      1. Crea las tablas SQLite si no existen.
+      1. Crea las tablas de la base de datos si no existen.
       2. Crea los directorios de local_storage si no existen.
       3. Lanza el queue_worker como tarea asyncio para procesamiento serial de jobs.
 
     Shutdown:
       4. Cancela el queue_worker limpiamente.
     """
-    # 1. Crear tablas SQLite
-    logger.info("Inicializando base de datos SQLite...")
+    # 1. Crear tablas (PostgreSQL Cloud SQL o SQLite local)
+    from api.database import SQLALCHEMY_DATABASE_URL
+    import re as _re
+    _db_safe = _re.sub(r':(.*?)@', ':***@', SQLALCHEMY_DATABASE_URL)  # Ocultar contraseña
+    _db_type = "SQLite" if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else "PostgreSQL (Cloud SQL)"
+    logger.info(f"Inicializando base de datos [{_db_type}]: {_db_safe}")
     create_tables()
-    logger.info("Base de datos lista: local_jobs.db")
+    logger.info(f"Base de datos lista [{_db_type}].")
 
     # 2. Crear directorios de almacenamiento local
     for dir_path in LOCAL_STORAGE_DIRS:
@@ -226,10 +231,10 @@ app = FastAPI(
     title="PulmoSeg 3D — API de Segmentación Pulmonar",
     description=(
         "API Gateway para el sistema de segmentación 3D de lesiones pulmonares. "
-        "Fase 1: Entorno de Desarrollo Local. "
-        "Sustituye GCP (Firestore, GCS, Pub/Sub) por SQLite, filesystem y BackgroundTasks."
+        "Entorno de Producción desplegado en Google Cloud Run. "
+        "Utiliza PostgreSQL (Cloud SQL) para la persistencia de estados y procesamiento asíncrono."
     ),
-    version="1.1.0-local",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
@@ -270,9 +275,9 @@ app.add_middleware(
     summary="Crear un Job de Segmentación (Multipart Upload)",
     description=(
         "Recibe los archivos DICOM reales via multipart/form-data, "
-        "los guarda en un directorio permanente temp_{job_id}/, crea el registro "
-        "en SQLite con estado QUEUED, lanza la tarea en segundo plano y retorna "
-        "HTTP 202 Accepted con el job_id (UUID v4)."
+        "los guarda en un directorio temporal, crea el registro "
+        "en la base de datos (Cloud SQL) con estado QUEUED, encola la tarea "
+        "y retorna HTTP 202 Accepted con el job_id (UUID v4)."
     ),
 )
 async def create_segmentation_job(
@@ -290,10 +295,10 @@ async def create_segmentation_job(
     """
     Flujo Multipart Upload:
     1. Genera un job_id UUID v4 puro (ej: "f47ac10b-58cc-4372-a567-0e02b2c3d479").
-    2. Crea directorio permanente local_storage/inputs/temp_{job_id}/.
+    2. Crea directorio para procesar los archivos de entrada.
     3. Guarda allí todos los archivos binarios recibidos.
-    4. Crea registro en SQLite con estado QUEUED.
-    5. Lanza BackgroundTask con la ruta al directorio.
+    4. Crea registro en la base de datos con estado QUEUED.
+    5. Encola la tarea en Background.
     6. Retorna 202 Accepted inmediatamente.
 
     Los archivos DICOM se conservan en disco para permitir re-análisis clínico
@@ -377,7 +382,7 @@ async def create_segmentation_job(
         "dicom_temp_dir": str(temp_dicom_dir),
     }
 
-    # --- 5. Crear registro en SQLite ---
+    # --- 5. Crear registro en la base de datos ---
     new_job = SegmentationJob(
         job_id=job_id,
         status="QUEUED",
@@ -458,7 +463,7 @@ def cancel_job(
     job.add_state_entry("CANCELLED")
     job.error_message = "Cancelado por el usuario."
     job.updated_at = __import__("datetime").datetime.now(
-        __import__("datetime").timezone.utc
+        __import__("zoneinfo").ZoneInfo("America/Santiago")
     )
     db.commit()
 
@@ -503,9 +508,9 @@ async def create_segmentation_job_from_nifti(
     """
     Flujo NIfTI directo (validación):
     1. Genera un job_id UUID v4.
-    2. Guarda el .nii.gz en local_storage/inputs/temp_{job_id}/volume.nii.gz.
-    3. Crea registro en SQLite con estado QUEUED.
-    4. Lanza BackgroundTask pasando nifti_path en lugar de dicom_dir.
+    2. Guarda el .nii.gz recibido.
+    3. Crea registro en la base de datos con estado QUEUED.
+    4. Encola la tarea en background.
     5. Retorna 202 Accepted inmediatamente.
     """
     job_id = str(uuid.uuid4())
@@ -555,7 +560,7 @@ async def create_segmentation_job_from_nifti(
         "validation_mode": True,
     }
 
-    # Crear registro en SQLite
+    # Crear registro en la base de datos
     new_job = SegmentationJob(
         job_id=job_id,
         status="QUEUED",
@@ -594,7 +599,7 @@ async def create_segmentation_job_from_nifti(
     response_model=SegmentationResultResponse,
     summary="Consultar estado de un Job",
     description=(
-        "Consulta la base de datos SQLite y retorna el estado actual "
+        "Consulta la base de datos y retorna el estado actual "
         "del Job. Si está COMPLETED, incluye clinical_results y artifacts "
         "(con dicom_image_ids para el visor)."
     ),
@@ -721,6 +726,22 @@ async def serve_dicom_file(
     matches = list(base_path.rglob(filename))
     
     if not matches or not matches[0].is_file():
+        # Fallback a GCS (Cloud Run es stateless)
+        try:
+            from worker.gcs_utils import GCS_BUCKET_INPUTS, _get_client
+            client = _get_client()
+            blobs = list(client.list_blobs(GCS_BUCKET_INPUTS, prefix=f"inputs/{job_id}/"))
+            target_blob = next((b for b in blobs if b.name.endswith(f"/{filename}") or b.name == f"inputs/{job_id}/{filename}"), None)
+            
+            if target_blob:
+                dest_path = base_path / filename
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                target_blob.download_to_filename(str(dest_path))
+                matches = [dest_path]
+        except Exception as e:
+            logger.error(f"Error downloading DICOM from GCS: {e}")
+
+    if not matches or not matches[0].is_file():
         raise HTTPException(
             status_code=404,
             detail=f"Archivo DICOM no encontrado: {filename}",
@@ -774,35 +795,38 @@ async def serve_nifti_file(
                    "La segmentación debe completarse antes de acceder al NIfTI.",
         )
 
-    # Buscar el archivo NIfTI en el directorio de salida
+    # Buscar el archivo de máscara NIfTI en el directorio de salida
     output_dir = LOCAL_STORAGE_BASE / "outputs" / job_id
-    nifti_candidates = list(output_dir.glob("*.nii.gz")) if output_dir.exists() else []
+    mask_path = output_dir / "mask.nii.gz"
 
-    if not nifti_candidates:
-        # Fallback: buscar en result_data del job
+    if not mask_path.exists():
+        # Fallback a GCS (Cloud Run es stateless)
         result = job.get_result_data()
         if result:
             nifti_url = result.get("artifacts", {}).get("segmentation_mask_nifti_url", "")
-            nifti_path = Path(nifti_url) if nifti_url else None
-            if nifti_path and nifti_path.exists():
-                return FileResponse(
-                    path=str(nifti_path),
-                    media_type="application/gzip",
-                    filename=nifti_path.name,
-                )
+            if nifti_url and nifti_url.startswith("gs://"):
+                try:
+                    from worker.gcs_utils import GCS_BUCKET_OUTPUTS, _get_client
+                    blob_name = nifti_url.replace(f"gs://{GCS_BUCKET_OUTPUTS}/", "")
+                    client = _get_client()
+                    bucket = client.bucket(GCS_BUCKET_OUTPUTS)
+                    blob = bucket.blob(blob_name)
+                    if blob.exists():
+                        output_dir.mkdir(parents=True, exist_ok=True)
+                        blob.download_to_filename(str(mask_path))
+                except Exception as e:
+                    logger.error(f"Error downloading NIfTI from GCS: {e}")
 
+    if not mask_path.exists():
         raise HTTPException(
             status_code=404,
-            detail=f"Archivo NIfTI no encontrado para el job {job_id}.",
+            detail=f"Archivo NIfTI (mask.nii.gz) no encontrado para el job {job_id}.",
         )
 
-    # Usar el primer (y normalmente único) archivo NIfTI encontrado
-    nifti_path = nifti_candidates[0]
-
     return FileResponse(
-        path=str(nifti_path),
+        path=str(mask_path),
         media_type="application/gzip",
-        filename=nifti_path.name,
+        filename=mask_path.name,
     )
 
 
@@ -889,7 +913,7 @@ async def serve_volume(
     summary="Listar historial de Jobs",
     description=(
         "Retorna la lista paginada de todos los Jobs de segmentación almacenados "
-        "en SQLite, ordenados por fecha de creación descendente (más reciente primero). "
+        "en la base de datos, ordenados por fecha de creación descendente (más reciente primero). "
         "Soporta búsqueda por patient_pseudo_id y paginación con skip/limit."
     ),
 )
@@ -1004,5 +1028,20 @@ def health_check():
     return {
         "status": "healthy",
         "service": "PulmoSeg 3D API",
-        "version": "1.1.0-local",
+        "version": "1.1.0",
     }
+
+
+# ===========================================================================
+# Endpoint: GET /config
+# ===========================================================================
+@app.get(
+    "/config",
+    summary="Obtiene la configuración activa del modelo",
+    description="Devuelve los parámetros del modelo que se están usando actualmente.",
+)
+def get_config():
+    """Retorna la configuración cargada desde model_config.py como JSON."""
+    config = get_active_config()
+    import dataclasses
+    return dataclasses.asdict(config)

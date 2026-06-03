@@ -1,38 +1,53 @@
 """
-database.py — Configuración de SQLAlchemy y modelo SQLite para PulmoSeg 3D.
+database.py — Configuración de SQLAlchemy para PulmoSeg 3D.
 
-Regla 1 aplicada: Sustituye Google Cloud Firestore por SQLite local.
+Soporta dos backends según la variable de entorno DATABASE_URL:
+  - SQLite  (desarrollo local): sqlite:///./local_jobs.db
+  - PostgreSQL (Cloud SQL GCP):  postgresql+psycopg2://user:pass@/dbname?host=/cloudsql/...
+
 El esquema refleja exactamente la estructura de SegmentationJob_Document.json.
 Los campos complejos (request_data, worker_details, state_history, result_data)
-se almacenan como TEXT con serialización JSON, ya que SQLite no tiene tipo JSON
-nativo robusto y esto es suficiente para la Fase 1 de desarrollo local.
+se almacenan como TEXT con serialización JSON para compatibilidad entre backends.
 """
 
 import json
 import os
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Generator
+
+# Configuración de zona horaria local (Chile)
+LOCAL_TZ = ZoneInfo("America/Santiago")
 
 from sqlalchemy import Column, DateTime, Integer, String, Text, create_engine
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 # ---------------------------------------------------------------------------
-# Configuración del Engine SQLite
+# Configuración del Engine
 # ---------------------------------------------------------------------------
-# DATABASE_URL se lee desde la variable de entorno para soportar Docker.
-# En desarrollo local (sin Docker) usa la ruta relativa por defecto.
-# En Docker, docker-compose.yml la sobreescribe apuntando al volumen montado:
-#   DATABASE_URL=sqlite:////app/local_storage/local_jobs.db
-# check_same_thread=False es necesario para que SQLAlchemy funcione con
-# FastAPI, que puede acceder a la DB desde diferentes threads del thread pool.
+# DATABASE_URL se lee desde la variable de entorno.
+#
+# Desarrollo local (SQLite):
+#   DATABASE_URL=sqlite:///./local_jobs.db   (default)
+#
+# Cloud Run / Cloud SQL (PostgreSQL):
+#   DATABASE_URL=postgresql+psycopg2://user:pass@/dbname?host=/cloudsql/PROJECT:REGION:INSTANCE
+#   La conexión a Cloud SQL usa Unix socket (/cloudsql/...) en Cloud Run.
+#
+# check_same_thread: solo necesario para SQLite (no aplicable a PostgreSQL).
 SQLALCHEMY_DATABASE_URL = os.environ.get(
     "DATABASE_URL", "sqlite:///./local_jobs.db"
 )
 
+_is_sqlite = SQLALCHEMY_DATABASE_URL.startswith("sqlite")
+_connect_args = {"check_same_thread": False} if _is_sqlite else {}
+
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False},
+    connect_args=_connect_args,
     echo=False,  # Cambiar a True para debug SQL
+    # Pool pre-ping verifica la conexión antes de usarla (útil para Cloud SQL)
+    pool_pre_ping=not _is_sqlite,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -73,13 +88,13 @@ class SegmentationJob(Base):
 
     # --- Timestamps ---
     created_at = Column(
-        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+        DateTime, nullable=False, default=lambda: datetime.now(LOCAL_TZ)
     )
     updated_at = Column(
         DateTime,
         nullable=False,
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(LOCAL_TZ),
+        onupdate=lambda: datetime.now(LOCAL_TZ),
     )
 
     # --- Helpers de serialización JSON ---
@@ -99,7 +114,7 @@ class SegmentationJob(Base):
         history = self.get_state_history()
         history.append({
             "state": state,
-            "time": datetime.now(timezone.utc).isoformat(),
+            "time": datetime.now(LOCAL_TZ).isoformat(),
         })
         self.set_state_history(history)
 

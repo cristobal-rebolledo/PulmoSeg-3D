@@ -97,7 +97,7 @@ export default function App() {
       if (tickRunningRef.current) return; // anti-overlap: no lanzar si ya hay un tick activo
 
       const now        = Date.now();
-      const activeJobs = jobsRef.current.filter((j) => !TERMINAL.has(j.status));
+      const activeJobs = jobsRef.current.filter((j) => !TERMINAL.has(j.status) && j.status !== "UPLOADING");
       if (activeJobs.length === 0) return;
 
       // Filtrar solo los jobs cuyo intervalo ya venció
@@ -403,7 +403,7 @@ export default function App() {
 
       {/* Confirm Switch Dialog */}
       {pendingAction && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-[fade-in_0.2s_ease-out]">
+        <div className="fixed inset-0 z-[999] flex items-center justify-center bg-black/60 backdrop-blur-md animate-[fade-in_0.2s_ease-out]">
           <div className="glass-card max-w-lg w-full mx-4 border rounded-[28px] shadow-2xl flex flex-col items-center text-center" style={{ padding: "48px", borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-sidebar)" }}>
             <div className="w-20 h-20 rounded-2xl mb-8 flex items-center justify-center" style={{ backgroundColor: "oklch(0.72 0.17 195 / 0.12)", color: "oklch(0.72 0.17 195)", border: "1px solid oklch(0.72 0.17 195 / 0.25)" }}>
               <ArrowRightLeft className="w-10 h-10" strokeWidth={2.5} />

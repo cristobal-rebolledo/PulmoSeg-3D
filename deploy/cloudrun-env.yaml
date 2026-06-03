@@ -1,0 +1,5 @@
+GCS_BUCKET_INPUTS=pulmoseg-inputs
+GCS_BUCKET_OUTPUTS=pulmoseg-outputs
+GCS_BUCKET_MODELS=pulmoseg-models
+CORS_ORIGINS=https://pulmoseg3d.web.app,http://localhost:5173
+MONAI_DATA_DIRECTORY=/tmp/models

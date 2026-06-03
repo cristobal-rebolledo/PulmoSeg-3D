@@ -22,12 +22,14 @@ Nota: Los directorios temp_{job_id}/ NO se eliminan al finalizar.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from api.database import SegmentationJob, SessionLocal
-from worker.mock_data import get_mock_worker_details
+from worker.mock_data import get_worker_details
 from worker.pipeline_monai import run_inference_pipeline
+from worker.gcs_utils import upload_dicom_dir
 
 logger = logging.getLogger("pulmoseg.worker")
 
@@ -154,7 +156,7 @@ def _update_progress(
         raise RuntimeError("__CANCELLED__")
 
     job.progress_percentage = progress
-    job.updated_at = datetime.now(timezone.utc)
+    job.updated_at = datetime.now(ZoneInfo("America/Santiago"))
     db.commit()
     logger.info(f"[{job.job_id}] Progreso: {progress}% — {message}")
 
@@ -230,8 +232,8 @@ def run_segmentation_job(
         job.status = "PROCESSING"
         job.progress_percentage = 5
         job.add_state_entry("PROCESSING")
-        job.set_worker_details(get_mock_worker_details())
-        job.updated_at = datetime.now(timezone.utc)
+        job.set_worker_details(get_worker_details())
+        job.updated_at = datetime.now(ZoneInfo("America/Santiago"))
         db.commit()
 
         logger.info(f"[{job_id}] Estado actualizado: PROCESSING (5%)")
@@ -286,6 +288,13 @@ def run_segmentation_job(
             # Fallback: resolver desde metadatos del request (compatibilidad)
             resolved_dicom_dir = _resolve_dicom_directory(request_data)
 
+        if resolved_dicom_dir:
+            try:
+                _update_progress(db, job, 12, "Subiendo DICOMs a Cloud Storage...")
+                upload_dicom_dir(job_id, resolved_dicom_dir)
+            except Exception as e:
+                logger.error(f"[{job_id}] Error subiendo DICOMs a GCS: {e}")
+
         # --- 4. Ejecutar pipeline MONAI ---
         _check_cancelled(db, job_id)  # Checkpoint 2: antes de iniciar inferencia
         _update_progress(db, job, 15, "Iniciando pipeline MONAI...")
@@ -323,7 +332,7 @@ def run_segmentation_job(
         job.progress_percentage = 100
         job.add_state_entry("COMPLETED")
         job.set_result_data(result)
-        job.updated_at = datetime.now(timezone.utc)
+        job.updated_at = datetime.now(ZoneInfo("America/Santiago"))
         db.commit()
 
         logger.info(f"[{job_id}] ✅ Job completado exitosamente (100%)")
@@ -343,7 +352,7 @@ def run_segmentation_job(
                     job.status = "FAILED"
                     job.add_state_entry("FAILED")
                     job.error_message = str(e)
-                    job.updated_at = datetime.now(timezone.utc)
+                    job.updated_at = datetime.now(ZoneInfo("America/Santiago"))
                     db.commit()
             except Exception as db_error:
                 logger.error(
@@ -362,7 +371,7 @@ def run_segmentation_job(
                 job.status = "FAILED"
                 job.add_state_entry("FAILED")
                 job.error_message = str(e)
-                job.updated_at = datetime.now(timezone.utc)
+                job.updated_at = datetime.now(ZoneInfo("America/Santiago"))
                 db.commit()
                 logger.info(f"[{job_id}] Estado actualizado: FAILED")
         except Exception as db_error:
@@ -373,8 +382,22 @@ def run_segmentation_job(
 
 
     finally:
+        # Limpieza de archivos temporales si el pipeline falló o fue cancelado
+        try:
+            job_final = db.query(SegmentationJob).filter(
+                SegmentationJob.job_id == job_id
+            ).first()
+            if job_final and job_final.status in ("FAILED", "CANCELLED"):
+                import shutil
+                temp_dir = LOCAL_STORAGE_BASE / "inputs" / f"temp_{job_id}"
+                if temp_dir.exists():
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    logger.info(f"[{job_id}] 🗑️ Directorio temporal eliminado por fallo/cancelación: {temp_dir}")
+        except Exception as cleanup_error:
+            logger.error(f"[{job_id}] Error al intentar limpiar directorio temporal: {cleanup_error}")
+
         # Siempre cerrar la sesión de DB
         db.close()
         logger.info(f"[{job_id}] Worker finalizado — sesión de DB cerrada")
-        # NOTA: Los archivos DICOM en temp_{job_id}/ se conservan intencionalmente.
-        # Permiten re-análisis clínico y visualización posterior con DicomCanvasViewer (MPR Canvas).
+        # NOTA: Los archivos DICOM en temp_{job_id}/ se conservan intencionalmente
+        # SOLO si el estado es COMPLETED, para permitir re-análisis clínico y visualización.

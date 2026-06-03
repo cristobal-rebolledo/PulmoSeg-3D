@@ -33,7 +33,7 @@ services:
   backend:
     build:
       context: .                      # Raíz del proyecto (donde está el Dockerfile)
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.local
     image: pulmoseg-backend:latest
     container_name: pulmoseg-backend
 

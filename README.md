@@ -7,64 +7,90 @@ PulmoSeg-3D es una solución integral para la visualización y análisis de tomo
 
 ## 🚀 Características Principales
 
-- **Pipeline de Inferencia Real**: Procesamiento de volúmenes DICOM reales usando MONAI y PyTorch.
-- **Visor MPR Avanzado**: Visualización sincronizada en planos Axial, Coronal y Sagital.
-- **Arquitectura Contenerizada**: Despliegue robusto mediante Docker para Backend, Frontend y Procesamiento.
-- **Alineación Medical-Grade**: Resampleado dinámico para garantizar que las máscaras de IA coincidan perfectamente con la anatomía del paciente.
-- **Gestión de Trabajos**: Sistema de colas asíncronas para procesar estudios grandes sin bloquear la interfaz.
+- **Pipeline de Inferencia en la Nube**: Inferencia usando `SegResNet` optimizado con `Sliding Window` ejecutado en aceleradores **NVIDIA L4** a través de Google Cloud Run.
+- **Visor MPR Avanzado**: Visualización sincronizada en planos Axial, Coronal y Sagital, cargando artefactos DICOM directamente desde la nube.
+- **Arquitectura Serverless y Escalable**: El sistema es totalmente "stateless" (sin estado), escalando horizontalmente según la demanda de los usuarios.
+- **Alineación Medical-Grade**: Resampleado dinámico para garantizar que las máscaras de IA coincidan perfectamente con la anatomía del paciente original.
+- **Configuración Dinámica**: Ficha técnica e interfaz adaptativa sincronizada en tiempo real mediante un endpoint `/config` desde el motor del modelo.
 
 ---
 
-## 🛠️ Stack Tecnológico
+## 🛠️ Stack Tecnológico Actualizado
 
-- **Frontend**: React.js, Vite, HTML5 Canvas (Medical Viewports).
-- **Backend**: FastAPI (Python 3.10), SQLite (Persistencia).
-- **IA/Procesamiento**: MONAI, PyTorch, SimpleITK.
-- **Infraestructura**: Docker & Docker Compose.
+### 🖥️ Frontend
+- **Framework**: React.js + Vite.
+- **Visualización**: HTML5 Canvas (Medical Viewports adaptativos).
+- **Despliegue**: Google Cloud Run (contenedores serverless tanto para Backend como Frontend).
+
+### ⚙️ Backend
+- **Framework**: FastAPI (Python 3.10) + Uvicorn.
+- **Inferencia**: MONAI 1.x, PyTorch 2.2.0, SimpleITK.
+- **Base de Datos**: PostgreSQL alojado en Google Cloud SQL (reemplaza a SQLite).
+- **Almacenamiento (Storage)**: Google Cloud Storage (GCS) usando los buckets `pulmoseg-inputs`, `pulmoseg-outputs` y `pulmoseg-models`.
+- **Despliegue**: Google Cloud Run (Instancias de 2ª Generación, 4 vCPU, 16GiB RAM, 1x NVIDIA L4).
 
 ---
 
-## 📦 Instalación y Despliegue
+## 📦 Despliegue en la Nube (Google Cloud Platform)
 
-### Requisitos Previos
-- Docker y Docker Desktop (con WSL2 en Windows).
-- Pesos del modelo (`model.pt`) colocados en `local_storage/models/spleen_model/model.pt`.
+### 1. Configuración de Variables de Entorno (Backend)
+El servicio Cloud Run inyecta los secretos de forma segura a través de `Secret Manager`. Se requiere configurar las siguientes variables:
+- `DATABASE_URL`: URI de conexión a tu instancia Cloud SQL (PostgreSQL).
+- `PULMOSEG_API_KEY`: Clave de seguridad del sistema.
+- `GCS_BUCKET_INPUTS`: `pulmoseg-inputs`
+- `GCS_BUCKET_OUTPUTS`: `pulmoseg-outputs`
+- `GCS_BUCKET_MODELS`: `pulmoseg-models`
 
-### Pasos Rápidos
+### 2. Despliegue del Backend (Cloud Run)
+Se debe compilar la imagen Docker localmente o mediante Cloud Build, especificando el acelerador L4 y desactivando la redundancia zonal para la GPU:
+```bash
+gcloud run deploy pulmoseg-backend \
+  --source . \
+  --project pulmoseg3d \
+  --region us-central1 \
+  --cpu=4 \
+  --memory=16Gi \
+  --concurrency=1 \
+  --max-instances=3 \
+  --set-env-vars="GCS_BUCKET_INPUTS=pulmoseg-inputs,GCS_BUCKET_OUTPUTS=pulmoseg-outputs" \
+  --set-secrets="DATABASE_URL=pulmoseg-db-url:latest,PULMOSEG_API_KEY=pulmoseg-api-key:latest" \
+  --allow-unauthenticated
+### 3. Despliegue del Frontend (Cloud Run)
+El frontend se sirve mediante Nginx y se compila automáticamente en Google Cloud Build. El sistema leerá automáticamente el archivo `.env.production` (asegúrate de que esté configurado) para inyectar la URL del backend.
+
+Ejecuta el siguiente comando para compilar y desplegar el frontend en Cloud Run:
+```bash
+gcloud run deploy pulmoseg-frontend \
+  --source ./frontend \
+  --project pulmoseg3d \
+  --region us-central1 \
+  --allow-unauthenticated
+```
+
+---
+
+## 💻 Entorno de Desarrollo Local (Docker Compose)
+
+Si deseas probar el sistema en tu propia máquina (requiere Docker Desktop con soporte GPU WSL2 en Windows o Linux nativo):
 
 1. **Configurar Entorno**:
-   Copia el archivo de ejemplo y configura tu API Key:
-   ```bash
-   cp .env.example .env
-   ```
-
+   Copia el archivo `.env.example` a `.env` y ajusta `PULMOSEG_API_KEY`.
 2. **Levantar el Sistema**:
-   Ejecuta el siguiente comando para construir e iniciar todos los servicios:
    ```bash
    docker compose up -d --build
    ```
-
-3. **Acceder a la Plataforma**:
-   - **Frontend**: [http://localhost](http://localhost)
-   - **API Docs**: [http://localhost/api/docs](http://localhost/api/docs)
+3. **Acceso**:
+   - Web: [http://localhost](http://localhost)
+   - Swagger API: [http://localhost:8000/docs](http://localhost:8000/docs)
 
 ---
 
 ## 📂 Estructura del Proyecto
 
-- `/api`: Servidor FastAPI que gestiona la lógica de negocio y la base de datos.
-- `/worker`: Pipeline de procesamiento MONAI e inferencia de modelos.
-- `/frontend`: Aplicación React con visores médicos personalizados.
-- `/local_storage`: Volumen compartido para persistencia de DICOMs, NIfTIs y modelos (No incluido en Git).
-
----
-
-## 🧪 Validación Espacial
-
-El proyecto incluye una herramienta de validación matemática para asegurar que la segmentación coincide con el espacio físico del DICOM original:
-```bash
-docker compose exec backend python local_storage/verify_alignment.py <ruta_dicom> <ruta_nifti>
-```
+- `/api`: Controlador FastAPI, gestión de base de datos (PostgreSQL/SQLite) e integración con GCS.
+- `/worker`: Pipeline de procesamiento MONAI `SegResNet`, inferencia y transformaciones volumétricas.
+- `/frontend`: Aplicación React orientada a componentes.
+- `/system_tests`: Scripts de validación automatizada (Pruebas de Carga, Latencia y limpieza de buckets en la nube).
 
 ---
 
