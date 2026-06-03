@@ -36,8 +36,8 @@ RUN npm ci
 # La API Key se embebe en el bundle en tiempo de compilación (Vite reemplaza
 # import.meta.env.VITE_API_KEY). En producción real, usar un proxy en el
 # backend que no exponga la clave al cliente.
-ARG VITE_API_KEY
-ENV VITE_API_KEY=${VITE_API_KEY}
+# Las variables VITE_API_KEY y VITE_API_BASE_URL se leen automáticamente
+# desde el archivo .env.production gracias a Vite.
 
 # ---------------------------------------------------------------------------
 # Compilar la aplicación
@@ -66,7 +66,6 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 #   2. Proxy /api/ → http://backend:8000/ (nombre de servicio Docker Compose)
 #   3. Permite uploads grandes de DICOM (hasta 512 MB)
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-
-EXPOSE 80
+EXPOSE 8080
 
 CMD ["nginx", "-g", "daemon off;"]

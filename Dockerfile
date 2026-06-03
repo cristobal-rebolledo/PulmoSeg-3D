@@ -1,24 +1,26 @@
 # ===========================================================================
-# Dockerfile — Backend PulmoSeg-3D (FastAPI + PyTorch + MONAI + SimpleITK)
+# Dockerfile.prod — Backend PulmoSeg-3D para Google Cloud Platform
 #
-# Base: pytorch/pytorch:2.2.0-cuda11.8-cudnn8-runtime
-#   - PyTorch 2.2.0 + CUDA 11.8 preinstalados (NO reinstalar torch via pip)
-#   - Compatible con WSL2 + NVIDIA GPU via nvidia-container-toolkit
-#   - Preparado para migración a Google Cloud (Cloud Run / GKE)
+# Diferencias con Dockerfile (desarrollo local):
+#   - Instala requirements.txt (producción) en lugar de requirements_local.txt
+#   - Incluye google-cloud-storage y asyncpg para GCS y Cloud SQL
+#   - Sin volumen de local_storage (usa GCS para inputs/outputs/models)
+#   - Compatible con Cloud Run GPU (NVIDIA T4)
 #
-# Uso:
-#   docker compose build backend
-#   docker compose up backend
+# Build y push a Artifact Registry:
+#   docker build -f Dockerfile.prod \
+#     -t us-central1-docker.pkg.dev/pulmoseg3d/pulmoseg/backend:latest .
+#   docker push us-central1-docker.pkg.dev/pulmoseg3d/pulmoseg/backend:latest
 # ===========================================================================
 
 FROM pytorch/pytorch:2.2.0-cuda11.8-cudnn8-runtime
 
 # ---------------------------------------------------------------------------
-# Labels de metadatos (OCI Image Spec)
+# Labels de metadatos
 # ---------------------------------------------------------------------------
 LABEL maintainer="PulmoSeg-3D"
-LABEL description="API FastAPI + Worker MONAI para segmentación pulmonar 3D"
-LABEL version="1.1.0"
+LABEL description="API FastAPI + Worker MONAI — Google Cloud Run (GPU)"
+LABEL version="2.0.0-gcp"
 
 # ---------------------------------------------------------------------------
 # Variables de entorno del sistema
@@ -26,16 +28,15 @@ LABEL version="1.1.0"
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
-    # Previene que MONAI descargue datos de ejemplo en tiempo de ejecución
-    MONAI_DATA_DIRECTORY=/app/local_storage/models
+    # Directorio temporal en memoria para caché del modelo descargado de GCS
+    MONAI_DATA_DIRECTORY=/tmp/models \
+    # Google Cloud — valores por defecto (sobreescritos por Cloud Run env vars)
+    GCS_BUCKET_INPUTS=pulmoseg-inputs \
+    GCS_BUCKET_OUTPUTS=pulmoseg-outputs \
+    GCS_BUCKET_MODELS=pulmoseg-models
 
 # ---------------------------------------------------------------------------
 # Dependencias del sistema
-# ---------------------------------------------------------------------------
-# - curl:           Para el HEALTHCHECK de Docker
-# - libglib2.0-0:   Requerido por SimpleITK/OpenCV en sistemas headless
-# - libsm6, libxrender1, libxext6: Requeridos para rendering de imágenes (SimpleITK)
-# - libgomp1:       OpenMP para paralelismo en MONAI transforms
 # ---------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
@@ -52,57 +53,41 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # ---------------------------------------------------------------------------
-# Dependencias Python
+# Dependencias Python (producción)
 # ---------------------------------------------------------------------------
-# Copiamos requirements ANTES que el código fuente para aprovechar el
-# cache de capas Docker: si no cambian los deps, no se reinstalan.
-#
-# IMPORTANTE: torch, torchvision y torchaudio NO están en requirements_local.txt
-# porque ya vienen preinstalados en la imagen base pytorch/pytorch.
-# Incluirlos causaría un downgrade accidental a la versión CPU-only de PyPI.
-# ---------------------------------------------------------------------------
-COPY requirements_local.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements_local.txt
+    && pip install --no-cache-dir -r requirements.txt
 
 # ---------------------------------------------------------------------------
-# Código fuente de la aplicación
+# Código fuente
 # ---------------------------------------------------------------------------
 COPY api/ ./api/
 COPY worker/ ./worker/
 
 # ---------------------------------------------------------------------------
-# Estructura de directorios de almacenamiento local
+# Directorios temporales en memoria (no persisten entre requests en Cloud Run)
 # ---------------------------------------------------------------------------
-# Estos directorios serán sobreescritos por el volumen Docker en runtime,
-# pero crearlos aquí garantiza que existan si se ejecuta sin volumen.
-RUN mkdir -p \
-    local_storage/inputs \
-    local_storage/outputs \
-    local_storage/models
+RUN mkdir -p /tmp/models /tmp/inputs /tmp/outputs
 
 # ---------------------------------------------------------------------------
 # Puerto expuesto
 # ---------------------------------------------------------------------------
-EXPOSE 8000
+EXPOSE 8080
 
 # ---------------------------------------------------------------------------
 # Healthcheck
 # ---------------------------------------------------------------------------
-# start_period=90s: tiempo para que PyTorch/MONAI carguen en el primer arranque
-HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-    CMD curl -sf http://localhost:8000/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -sf http://localhost:8080/health || exit 1
 
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
-# --workers 1: SQLite no soporta bien escrituras concurrentes.
-#              BackgroundTasks de FastAPI corren en el mismo proceso del worker.
-#              Para escalar horizontalmente, migrar a PostgreSQL + Celery/Redis.
+# Puerto 8080: estándar de Cloud Run (sobreescribe el 8000 de desarrollo local)
+# --workers 1: la cola FIFO serializa los jobs internamente
 # --loop uvloop: mejor rendimiento async en Linux
-# ---------------------------------------------------------------------------
-CMD ["uvicorn", "api.main:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8000", \
+CMD ["hypercorn", "api.main:app", \
+     "--bind", "0.0.0.0:8080", \
      "--workers", "1", \
-     "--loop", "uvloop"]
+     "--worker-class", "uvloop"]

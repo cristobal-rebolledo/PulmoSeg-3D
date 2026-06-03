@@ -32,3 +32,22 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+*.swo
+*.swn
+*~
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# Archivos pesados de Machine Learning / Médicos
+*.pt
+*.pth
+*.nii
+*.nii.gz
+*.dcm
+
+# Logs y Archivos Temporales
+*.log
+scratch/
+estudios_zip/
+.firebase/

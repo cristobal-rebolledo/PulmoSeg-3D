@@ -1,0 +1,13 @@
+.git/
+local_storage/
+frontend/
+__pycache__/
+venv/
+.venv/
+system_tests/
+training/
+scratch/
+*.zip
+*.db
+*.log
+logs*.txt

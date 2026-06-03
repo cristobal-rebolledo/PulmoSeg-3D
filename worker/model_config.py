@@ -99,6 +99,7 @@ class ModelConfig:
     # Post-procesamiento
     use_softmax: bool = True
     foreground_channel: int = 1
+    threshold: float | None = None
 
 
 # ===========================================================================
@@ -145,28 +146,46 @@ SPLEEN_CONFIG = ModelConfig(
 )
 
 
-# ---------------------------------------------------------------------------
-# TODO: Cuando esté disponible el modelo de pulmón definitivo, agregar aquí:
-#
-# LUNG_CONFIG = ModelConfig(
-#     name="SegResNet Lung v2.1",
-#     bundle_dir=LOCAL_STORAGE_BASE / "models" / "lung_segmentation",
-#     weights_path=LOCAL_STORAGE_BASE / "models" / "lung_segmentation" / "model.pt",
-#     checkpoint_key=None,   # Si el .pt es directamente el state_dict
-#
-#     network_type="SegResNet",
-#     spatial_dims=3,
-#     in_channels=1,
-#     out_channels=2,
-#     channels=(...),
-#     ...
-#
-#     hu_window_min=-1000.0,
-#     hu_window_max=400.0,
-#     target_spacing=(1.5, 1.5, 1.5),
-#     ...
-# )
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Tumor Config (SegResNet)
+# ===========================================================================
+
+TUMOR_CONFIG = ModelConfig(
+    name="Lung Tumor SegResNet (Custom Auto3DSeg)",
+    bundle_dir=LOCAL_STORAGE_BASE / "models" / "tumor_segresnet_v1",
+    weights_path=LOCAL_STORAGE_BASE / "models" / "tumor_segresnet_v1" / "model.pt",
+    checkpoint_key="model",
+
+    # Architecture from SegResNet template
+    network_type="SegResNetDS",
+    spatial_dims=3,
+    in_channels=1,
+    out_channels=2,
+    channels=(32, 64, 128, 256),
+    strides=(1, 2, 2, 2),
+    num_res_units=2,
+    norm="INSTANCE_NVFUSER",
+
+    # Preprocessing from dataset analysis
+    hu_window_min=-909.54,
+    hu_window_max=223.79,
+    # Restaurado a la resolución original de entrenamiento gracias al incremento de RAM en WSL2
+    target_spacing=(0.785, 0.785, 0.998),
+    orientation="RAS",
+
+    # Inferer settings
+    roi_size=(96, 96, 96),
+    overlap=0.5,
+    sw_batch_size_gpu=1,
+    sw_batch_size_cpu=1,
+
+    # Post-processing
+    # Auto3DSeg con SegResNetDS produce 2 canales (background=0, tumor=1)
+    # y usa Softmax como activación final, igual que el modelo de bazo.
+    use_softmax=True,
+    foreground_channel=1,
+    threshold=0.35,  # Umbral más permisivo para no perder vóxeles tumorales (media era 54%)
+)
 
 
 def get_active_config() -> ModelConfig:
@@ -179,7 +198,7 @@ def get_active_config() -> ModelConfig:
     Returns:
         ModelConfig con todos los parámetros del modelo activo.
     """
-    config = SPLEEN_CONFIG
+    config = TUMOR_CONFIG
     logger.info(
         f"Configuración activa: {config.name} | "
         f"Red: {config.network_type} | "

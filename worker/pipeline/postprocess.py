@@ -104,9 +104,17 @@ def postprocess_prediction(
     else:
         activated = torch.sigmoid(prediction)
 
-    # 2. Discretización: argmax sobre la dimensión de canales
+    # 2. Discretización
     # prediction shape: (B, C, D, H, W) → mask shape: (B, D, H, W)
-    mask = torch.argmax(activated, dim=1)
+    if getattr(config, "threshold", None) is not None:
+        # Usar umbral explícito en el canal de interés
+        fg_probs = activated[:, config.foreground_channel, ...]
+        mask = (fg_probs > config.threshold).long()
+        logger.info(f"Aplicando umbral explícito {config.threshold} en canal {config.foreground_channel}")
+    else:
+        # Default: argmax sobre la dimensión de canales
+        mask = torch.argmax(activated, dim=1)
+        logger.info("Aplicando argmax por defecto")
 
     # 3. Eliminar batch dim y convertir a NumPy
     # mask shape: (B, D, H, W) → (D, H, W)

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import dicomParser from "dicom-parser";
 import { Layers3, AlertTriangle, Loader, Eye, EyeOff, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, SkipForward, SkipBack, LocateFixed } from "lucide-react";
-import { API_KEY } from "@/api/client";
+import { API_KEY, API_BASE } from "@/api/client";
 
 const WINDOWS = [
   { label: "Pulmón",     wc: -600, ww: 1500 },
@@ -399,7 +399,7 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
     async function load() {
       setStatus("loading"); setProgress(0);
       setSlices([]); setSegData(null); setSegLoaded(false);
-      const urls = dicomImageIds.map(p => `/api${p}`);
+      const urls = dicomImageIds.map(p => `${API_BASE}${p}`);
       const loaded = [];
       for (let i = 0; i < urls.length; i += 8) {
         if (cancelled) return;
@@ -423,7 +423,7 @@ export default function DicomCanvasViewer({ jobId, dicomImageIds }) {
       setCoronalY(Math.floor((sorted[0]?.rows || 512) / 2));
       setSagittalX(Math.floor((sorted[0]?.cols || 512) / 2));
       setStatus("ready");
-      fetch(`/api/nifti/${jobId}`, { headers: API_KEY ? { "X-API-Key": API_KEY } : {} })
+      fetch(`${API_BASE}/nifti/${jobId}`, { headers: API_KEY ? { "X-API-Key": API_KEY } : {} })
         .then(r => r.ok ? r.arrayBuffer() : null)
         .then(buf => buf ? parseNifti(buf) : null)
         .then(seg => { if (!cancelled && seg) { setSegData(seg); setSegLoaded(true); } })
