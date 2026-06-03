@@ -52,19 +52,18 @@ gcloud run deploy pulmoseg-backend \
   --memory=16Gi \
   --concurrency=1 \
   --max-instances=3 \
-  --set-env-vars="GCS_BUCKET_INPUTS=pulmoseg-inputs,GCS_BUCKET_OUTPUTS=pulmoseg-outputs" \
+  --env-vars-file=deploy/backend_env.yaml \
   --set-secrets="DATABASE_URL=pulmoseg-db-url:latest,PULMOSEG_API_KEY=pulmoseg-api-key:latest" \
   --allow-unauthenticated
-### 3. Despliegue del Frontend (Cloud Run)
-El frontend se sirve mediante Nginx y se compila automáticamente en Google Cloud Build. El sistema leerá automáticamente el archivo `.env.production` (asegúrate de que esté configurado) para inyectar la URL del backend.
+```
+### 3. Despliegue del Frontend (Firebase Hosting)
+El frontend de React (Vite) se compila de forma estática y se aloja en Firebase Hosting para lograr la máxima velocidad y menor costo. El sistema lee el archivo `frontend/.env.production` en el momento de compilación para inyectar la URL del backend.
 
-Ejecuta el siguiente comando para compilar y desplegar el frontend en Cloud Run:
+Ejecuta los siguientes comandos desde la carpeta raíz para compilar y subir los archivos a Firebase:
 ```bash
-gcloud run deploy pulmoseg-frontend \
-  --source ./frontend \
-  --project pulmoseg3d \
-  --region us-central1 \
-  --allow-unauthenticated
+cd frontend
+npm run build
+firebase deploy --only hosting
 ```
 
 ---
