@@ -43,17 +43,17 @@ El servicio Cloud Run inyecta los secretos de forma segura a través de `Secret 
 
 ### 2. Despliegue del Backend (Cloud Run)
 Se debe compilar la imagen Docker localmente o mediante Cloud Build, especificando el acelerador L4 y desactivando la redundancia zonal para la GPU:
-```bash
-gcloud run deploy pulmoseg-backend \
-  --source . \
-  --project pulmoseg3d \
-  --region us-central1 \
-  --cpu=4 \
-  --memory=16Gi \
-  --concurrency=1 \
-  --max-instances=3 \
-  --env-vars-file=deploy/backend_env.yaml \
-  --set-secrets="DATABASE_URL=pulmoseg-db-url:latest,PULMOSEG_API_KEY=pulmoseg-api-key:latest" \
+```powershell
+gcloud run deploy pulmoseg-backend `
+  --source . `
+  --project pulmoseg3d `
+  --region us-central1 `
+  --cpu=4 `
+  --memory=16Gi `
+  --concurrency=1 `
+  --max-instances=3 `
+  --env-vars-file=deploy/backend_env.yaml `
+  --set-secrets="DATABASE_URL=pulmoseg-db-url:latest,PULMOSEG_API_KEY=pulmoseg-api-key:latest" `
   --allow-unauthenticated
 ```
 ### 3. Despliegue del Frontend (Firebase Hosting)

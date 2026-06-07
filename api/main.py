@@ -55,7 +55,7 @@ from api.schemas import (
     VolumetricData,
 )
 from worker.background_task import run_segmentation_job
-from worker.model_config import get_active_config
+from worker.model_config import get_config_by_name
 
 # ---------------------------------------------------------------------------
 # Cargar variables de entorno desde .env
@@ -290,6 +290,9 @@ async def create_segmentation_job(
     study_instance_uid: str = Form(
         "unknown", description="UID del estudio DICOM"
     ),
+    model_name: str = Form(
+        "lung_tumor", description="Modelo a usar (ej. 'lung_tumor', 'spleen')"
+    ),
     db: Session = Depends(get_db),
 ):
     """
@@ -380,6 +383,7 @@ async def create_segmentation_job(
             "expected_file_count": saved_count,
         },
         "dicom_temp_dir": str(temp_dicom_dir),
+        "model_name": model_name,
     }
 
     # --- 5. Crear registro en la base de datos ---
@@ -503,6 +507,9 @@ async def create_segmentation_job_from_nifti(
     study_instance_uid: str = Form(
         "validation-study", description="UID del estudio (puede ser libre en validación)"
     ),
+    model_name: str = Form(
+        "lung_tumor", description="Modelo a usar (ej. 'lung_tumor', 'spleen')"
+    ),
     db: Session = Depends(get_db),
 ):
     """
@@ -558,6 +565,7 @@ async def create_segmentation_job_from_nifti(
         },
         "nifti_source": str(nifti_dest_path),
         "validation_mode": True,
+        "model_name": model_name,
     }
 
     # Crear registro en la base de datos
@@ -1042,6 +1050,6 @@ def health_check():
 )
 def get_config():
     """Retorna la configuración cargada desde model_config.py como JSON."""
-    config = get_active_config()
+    config = get_config_by_name()
     import dataclasses
     return dataclasses.asdict(config)

@@ -24,7 +24,7 @@ echo "============================================================"
 # --- Variables de Entorno ---
 GCS_DATASET="gs://pulmoseg-models/datasets/Task06_Lung"
 LOCAL_DATASET="/home/datasets/Task06_Lung"
-OUTPUT_DIR="/home/training_output/tumor_segresnet_v1"
+OUTPUT_DIR="/home/training_output/lung_tumor_segresnet_v1"
 PYTHON_BIN="python3"
 
 # ── Paso 1: Verificar GPU ──────────────────────────────────────────────────
@@ -115,7 +115,7 @@ echo "  ✅ VM lista para entrenar"
 echo ""
 echo "  Para iniciar el entrenamiento:"
 echo ""
-echo "  python3 training/train_tumor_segresnet.py \\"
+echo "  python3 training/train_lung_tumor_segresnet.py \\"
 echo "    --dataset_dir $LOCAL_DATASET"
 echo ""
 echo "  Para ver el progreso en tiempo real:"

@@ -150,15 +150,28 @@ def _resolve_dicom_directory(request_data: dict) -> Path:
 def _update_progress(
     db, job: SegmentationJob, progress: int, message: str
 ) -> None:
-    """Helper para actualizar el progreso del Job en la DB."""
+    """Helper para actualizar el progreso del Job en la DB.
+
+    El progreso es monotónico: nunca puede bajar. Si el valor nuevo es
+    menor al registrado actualmente (por ejemplo, porque el pipeline interno
+    reinicia su propio conteo desde 0), la actualización se ignora y solo
+    se registra el mensaje en el log para trazabilidad.
+    """
     db.refresh(job)
     if job.status == "CANCELLED":
         raise RuntimeError("__CANCELLED__")
+
+    if progress < job.progress_percentage:
+        logger.debug(
+            f"[{job.job_id}] Progreso ignorado ({progress}% < {job.progress_percentage}% actual) — {message}"
+        )
+        return
 
     job.progress_percentage = progress
     job.updated_at = datetime.now(ZoneInfo("America/Santiago"))
     db.commit()
     logger.info(f"[{job.job_id}] Progreso: {progress}% — {message}")
+
 
 def _check_cancelled(db, job_id: str) -> None:
     """

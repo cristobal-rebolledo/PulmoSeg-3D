@@ -10,7 +10,7 @@ Esta carpeta contiene los scripts para entrenar el modelo **SegResNet** con el d
 
 | Archivo | Descripción |
 |---|---|
-| `train_tumor_segresnet.py` | Script principal de entrenamiento |
+| `train_lung_tumor_segresnet.py` | Script principal de entrenamiento |
 | `setup_vm.sh` | Configura el entorno en la VM (instala dependencias) |
 
 ---
@@ -34,7 +34,7 @@ gcloud compute ssh instance-20260504-231017 \
 ### 3. Copiar los scripts a la VM
 En tu computador local (PowerShell):
 ```powershell
-gcloud compute scp training/setup_vm.sh training/train_tumor_segresnet.py `
+gcloud compute scp training/setup_vm.sh training/train_lung_tumor_segresnet.py `
   instance-20260504-231017:/home/ `
   --zone us-central1-c `
   --project pulmoseg3d
@@ -52,19 +52,19 @@ Esto instala PyTorch, MONAI y descarga el dataset Task06_Lung desde GCS.
 ### 5. Iniciar el entrenamiento
 ```bash
 # En primer plano (ver logs en tiempo real):
-python3 /home/train_tumor_segresnet.py \
+python3 /home/train_lung_tumor_segresnet.py \
   --dataset_dir /home/datasets/Task06_Lung
 
 # En segundo plano (recomendado: la sesión SSH puede cerrarse):
-nohup python3 /home/train_tumor_segresnet.py \
+nohup python3 /home/train_lung_tumor_segresnet.py \
   --dataset_dir /home/datasets/Task06_Lung \
-  > /home/training_output/tumor_segresnet_v1/nohup.log 2>&1 &
+  > /home/training_output/lung_tumor_segresnet_v1/nohup.log 2>&1 &
 echo "PID del proceso: $!"
 ```
 
 ### 6. Monitorear el Progreso (desde otra terminal)
 ```bash
-tail -f /home/training_output/tumor_segresnet_v1/training.log
+tail -f /home/training_output/lung_tumor_segresnet_v1/training.log
 ```
 
 ---
@@ -84,7 +84,7 @@ tail -f /home/training_output/tumor_segresnet_v1/training.log
 | Loss | DiceCE Loss |
 | Val Split | 80% train / 20% val (split fijo, fold 1/1) |
 | Val Interval | Cada 10 epochs |
-| Output | `gs://pulmoseg-models/trained/tumor_segresnet_v1/model.pt` |
+| Output | `gs://pulmoseg-models/trained/lung_tumor_segresnet_v1/model.pt` |
 
 ---
 
@@ -111,7 +111,7 @@ Al finalizar, el script imprimirá en consola:
   Dice Score de Validación : 0.67  (67.00%)
   Mejor época              : 280 de 300
   Tiempo total             : 28.4 horas
-  Modelo guardado en       : gs://pulmoseg-models/trained/tumor_segresnet_v1/model.pt
+  Modelo guardado en       : gs://pulmoseg-models/trained/lung_tumor_segresnet_v1/model.pt
 ================================================================
 ```
 
