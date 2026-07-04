@@ -123,7 +123,7 @@ export async function getConfig() {
  *
  * @returns {Promise<{job_id: string, status: string, message: string}>}
  */
-export async function createSegmentationJob({ files, patientId, studyUid }) {
+export async function createSegmentationJob({ files, patientId, studyUid, modelName }) {
   const url = `${API_BASE}/segment`;
 
   // Build FormData with files + metadata
@@ -131,6 +131,7 @@ export async function createSegmentationJob({ files, patientId, studyUid }) {
 
   formData.append("patient_pseudo_id", patientId || "unknown");
   formData.append("study_instance_uid", studyUid || "unknown");
+  formData.append("model_name", modelName || "lung_tumor");
 
   // Append each DICOM file under the same field name "files"
   for (const file of files) {

@@ -15,21 +15,23 @@ PulmoSeg-3D es una solución integral para la visualización y análisis de tomo
 
 ---
 
-## 🛠️ Stack Tecnológico Actualizado
-
 ### 🖥️ Frontend
-- **Framework**: React.js + Vite.
-- **Visualización**: HTML5 Canvas (Medical Viewports adaptativos).
-- **Despliegue**: Google Cloud Run (contenedores serverless tanto para Backend como Frontend).
+| Tecnología | Descripción |
+| :--- | :--- |
+| **Framework** | React.js 18.3 + Vite 6.0 (Empaquetado ultrarrápido) |
+| **Estilos** | Tailwind CSS 4.0 + Lucide Icons + Glassmorphism UI |
+| **Visualización 3D** | HTML5 Canvas (Medical Viewports adaptativos) |
+| **Despliegue** | Firebase Hosting (CDN global ultrarrápida) |
 
-### ⚙️ Backend
-- **Framework**: FastAPI (Python 3.10) + Uvicorn.
-- **Inferencia**: MONAI 1.x, PyTorch 2.2.0, SimpleITK.
-- **Base de Datos**: PostgreSQL alojado en Google Cloud SQL (reemplaza a SQLite).
-- **Almacenamiento (Storage)**: Google Cloud Storage (GCS) usando los buckets `pulmoseg-inputs`, `pulmoseg-outputs` y `pulmoseg-models`.
-- **Despliegue**: Google Cloud Run (Instancias de 2ª Generación, 4 vCPU, 16GiB RAM, 1x NVIDIA L4).
-
----
+### ⚙️ Backend & AI
+| Tecnología | Descripción |
+| :--- | :--- |
+| **API Gateway** | FastAPI 0.110 (Python 3.10) + Hypercorn (Asíncrono) |
+| **Modelos IA** | MONAI 1.3.2 (SegResNet), PyTorch 2.2.0 |
+| **Procesamiento Médico** | SimpleITK (Resampling, NIfTI, DICOM) |
+| **Base de Datos** | PostgreSQL (Google Cloud SQL) / SQLite local |
+| **Almacenamiento** | Google Cloud Storage (Buckets inputs, outputs, models) |
+| **Infraestructura** | Google Cloud Run (Instancias de 2ª Generación, L4 GPU) |
 
 ## 📦 Despliegue en la Nube (Google Cloud Platform)
 
@@ -43,17 +45,17 @@ El servicio Cloud Run inyecta los secretos de forma segura a través de `Secret 
 
 ### 2. Despliegue del Backend (Cloud Run)
 Se debe compilar la imagen Docker localmente o mediante Cloud Build, especificando el acelerador L4 y desactivando la redundancia zonal para la GPU:
-```bash
-gcloud run deploy pulmoseg-backend \
-  --source . \
-  --project pulmoseg3d \
-  --region us-central1 \
-  --cpu=4 \
-  --memory=16Gi \
-  --concurrency=1 \
-  --max-instances=3 \
-  --env-vars-file=deploy/backend_env.yaml \
-  --set-secrets="DATABASE_URL=pulmoseg-db-url:latest,PULMOSEG_API_KEY=pulmoseg-api-key:latest" \
+```powershell
+gcloud run deploy pulmoseg-backend `
+  --source . `
+  --project pulmoseg3d `
+  --region us-central1 `
+  --cpu=4 `
+  --memory=16Gi `
+  --concurrency=1 `
+  --max-instances=3 `
+  --env-vars-file=deploy/backend_env.yaml `
+  --set-secrets="DATABASE_URL=pulmoseg-db-url:latest,PULMOSEG_API_KEY=pulmoseg-api-key:latest" `
   --allow-unauthenticated
 ```
 ### 3. Despliegue del Frontend (Firebase Hosting)
@@ -65,6 +67,15 @@ cd frontend
 npm run build
 firebase deploy --only hosting
 ```
+
+---
+
+## 🌐 Enlaces de Producción
+
+Una vez desplegado en Google Cloud y Firebase, puedes acceder al sistema a través de los siguientes enlaces:
+
+- **Frontend (Web App)**: [https://pulmoseg3d-93cba.web.app](https://pulmoseg3d-93cba.web.app)
+- **Backend (Documentación API / Swagger UI)**: [https://pulmoseg-backend-827425626938.us-central1.run.app/docs](https://pulmoseg-backend-827425626938.us-central1.run.app/docs)
 
 ---
 

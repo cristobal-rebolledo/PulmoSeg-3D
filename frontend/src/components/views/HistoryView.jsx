@@ -239,7 +239,7 @@ export default function HistoryView({ onViewJob }) {
             <thead>
               <tr className="border-b" style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-input)" }}>
                 <th className="py-5 pr-4 text-xs font-semibold uppercase text-left" style={{ color: "var(--text-muted)", width: "16%", paddingLeft: "2rem" }}>Paciente</th>
-                <th className="py-5 px-4 text-xs font-semibold uppercase text-left" style={{ color: "var(--text-muted)", width: "12%" }}>ID Estudio</th>
+                <th className="py-5 px-4 text-xs font-semibold uppercase text-left" style={{ color: "var(--text-muted)", width: "12%" }}>Modelo</th>
                 <th className="py-5 px-4 text-xs font-semibold uppercase text-left" style={{ color: "var(--text-muted)", width: "14%" }}>Fecha</th>
                 <th className="py-5 px-4 text-xs font-semibold uppercase text-center" style={{ color: "var(--text-muted)", width: "10%" }}>Imágenes</th>
                 <th className="py-5 px-4 text-xs font-semibold uppercase text-right" style={{ color: "var(--text-muted)", width: "11%" }}>Volumen</th>
@@ -298,17 +298,15 @@ export default function HistoryView({ onViewJob }) {
                       </span>
                     </td>
 
-                    {/* ID Estudio */}
+                    {/* Modelo */}
                     <td className="px-4 py-4 align-middle text-left">
                       <div className="flex items-center gap-2">
                         <span 
-                          className="font-mono text-[13px] font-medium" 
+                          className="text-[13px] font-medium" 
                           style={{ color: "var(--text-secondary)" }}
-                          title={row.job_id}
                         >
-                          {row.job_id.split('-')[0]}
+                          {row.model_name === "lung_tumor" ? "Pulmón" : row.model_name === "spleen" ? "Bazo" : row.model_name || "—"}
                         </span>
-                        <CopyButton text={row.job_id} />
                       </div>
                     </td>
 

@@ -59,10 +59,25 @@ def get_mock_artifacts(job_id: str) -> dict:
 
 def get_worker_details() -> dict:
     """
-    Retorna detalles del worker que procesó el Job, detectando el hardware real.
+    Retorna detalles del worker que procesó el Job, detectando el hardware real
+    y calculando la huella digital (hash) real del modelo cargado.
     """
     import torch
-    
+    import hashlib
+    from worker.model_config import get_config_by_name
+
+    # Calcular y cachear el hash del modelo para no penalizar cada request
+    if not hasattr(get_worker_details, "_cached_hash"):
+        config = get_config_by_name()
+        if config.weights_path.exists():
+            sha256 = hashlib.sha256()
+            with open(config.weights_path, 'rb') as f:
+                while chunk := f.read(8192 * 1024):  # 8MB chunks
+                    sha256.update(chunk)
+            get_worker_details._cached_hash = "sha256:" + sha256.hexdigest()
+        else:
+            get_worker_details._cached_hash = "sha256:unknown_not_found"
+
     if torch.cuda.is_available():
         gpu_name = torch.cuda.get_device_name(0).replace(" ", "-").lower()
         instance_id = f"cloud-run-gpu-{gpu_name}"
@@ -71,10 +86,7 @@ def get_worker_details() -> dict:
         
     return {
         "instance_id": instance_id,
-        "model_hash": (
-            "sha256:e3b0c44298fc1c149afbf4c8996fb924"
-            "27ae41e4649b934ca495991b7852b855"
-        ),
+        "model_hash": get_worker_details._cached_hash,
         "frameworks": {
             "monai": "1.3.2",
             "torch": "2.2.0" + ("+cu118" if torch.cuda.is_available() else "+cpu"),

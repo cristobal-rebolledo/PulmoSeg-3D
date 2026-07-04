@@ -27,7 +27,7 @@ import torch
 
 from worker.clinical_metrics import compute_clinical_metrics
 from worker.mock_data import get_mock_artifacts
-from worker.model_config import get_active_config
+from worker.model_config import get_config_by_name
 from worker.pipeline.inference import get_inferer, load_model
 from worker.pipeline.loader import convert_dicom_to_nifti
 from worker.pipeline.postprocess import (
@@ -103,8 +103,9 @@ def run_inference_pipeline(
     # =========================================================================
     # PASO 2 — Cargar configuración del modelo activo
     # =========================================================================
-    config = get_active_config()
-    _report(5, f"Modelo configurado: {config.name}")
+    model_name = request_data.get("model_name", "lung_tumor")
+    config = get_config_by_name(model_name)
+    _report(5, f"Modelo configurado ({model_name}): {config.name}")
 
     # =========================================================================
     # PASO 2b — Garantizar que los pesos del modelo estén disponibles localmente

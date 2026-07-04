@@ -147,13 +147,13 @@ SPLEEN_CONFIG = ModelConfig(
 
 
 # ===========================================================================
-# Tumor Config (SegResNet)
+# Lung Tumor Config (SegResNet)
 # ===========================================================================
 
-TUMOR_CONFIG = ModelConfig(
+LUNG_TUMOR_CONFIG = ModelConfig(
     name="Lung Tumor SegResNet (Custom Auto3DSeg)",
-    bundle_dir=LOCAL_STORAGE_BASE / "models" / "tumor_segresnet_v1",
-    weights_path=LOCAL_STORAGE_BASE / "models" / "tumor_segresnet_v1" / "model.pt",
+    bundle_dir=LOCAL_STORAGE_BASE / "models" / "lung_tumor_segresnet_v1",
+    weights_path=LOCAL_STORAGE_BASE / "models" / "lung_tumor_segresnet_v1" / "model.pt",
     checkpoint_key="model",
 
     # Architecture from SegResNet template
@@ -188,19 +188,24 @@ TUMOR_CONFIG = ModelConfig(
 )
 
 
-def get_active_config() -> ModelConfig:
+AVAILABLE_MODELS = {
+    "lung_tumor": LUNG_TUMOR_CONFIG,
+    "spleen": SPLEEN_CONFIG
+}
+
+def get_config_by_name(model_name: str = "lung_tumor") -> ModelConfig:
     """
-    Retorna la configuración del modelo activo.
-
-    Para cambiar de modelo, simplemente retorna una instancia diferente
-    de ModelConfig (e.g. LUNG_CONFIG en lugar de SPLEEN_CONFIG).
-
+    Retorna la configuración del modelo solicitado.
+    
+    Args:
+        model_name (str): Identificador del modelo (ej. 'lung_tumor', 'spleen').
+        
     Returns:
         ModelConfig con todos los parámetros del modelo activo.
     """
-    config = TUMOR_CONFIG
+    config = AVAILABLE_MODELS.get(model_name, LUNG_TUMOR_CONFIG)
     logger.info(
-        f"Configuración activa: {config.name} | "
+        f"Configuración activa ({model_name}): {config.name} | "
         f"Red: {config.network_type} | "
         f"Pesos: {config.weights_path}"
     )

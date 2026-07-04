@@ -24,6 +24,14 @@ export default function CompactDropzone({ onSubmit, isSubmitting = false }) {
   // ── File processing ──────────────────────────────────────────────────────
   const processFiles = useCallback((fileList) => {
     const allFiles   = Array.from(fileList);
+    
+    const totalSize = allFiles.reduce((acc, file) => acc + file.size, 0);
+    const maxSize = 130 * 1024 * 1024; // 130 MB
+    if (totalSize > maxSize) {
+      alert(`El tamaño total del estudio (${(totalSize / 1024 / 1024).toFixed(1)} MB) excede el límite máximo permitido de 130 MB.`);
+      return;
+    }
+
     const dicomFiles = allFiles.filter(
       (f) => f.name.toLowerCase().endsWith(".dcm") || f.name.toLowerCase().endsWith(".dicom")
     );

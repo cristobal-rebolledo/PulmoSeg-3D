@@ -1,6 +1,6 @@
-﻿import torch
+import torch
 
-ckpt = torch.load(r"D:\Semestre 11\Desarrollo Proyecto de Título\Proyecto\PulmoSeg-3D\local_storage\models\tumor_segresnet_v1\model.pt", map_location='cpu')
+ckpt = torch.load(r"D:\Semestre 11\Desarrollo Proyecto de Título\Proyecto\PulmoSeg-3D\local_storage\models\lung_tumor_segresnet_v1\model.pt", map_location='cpu')
 
 if isinstance(ckpt, dict) and "state_dict" in ckpt:
     sd = ckpt["state_dict"]

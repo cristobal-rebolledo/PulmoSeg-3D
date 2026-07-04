@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
-import { FolderOpen, FileText, X, Send } from "lucide-react";
+import { FolderOpen, FileText, X, Send, BrainCircuit, ChevronDown } from "lucide-react";
 
 export default function DicomUploader({ onSubmit, isSubmitting = false, onClose }) {
   const [isDragging, setIsDragging] = useState(false);
@@ -9,11 +9,19 @@ export default function DicomUploader({ onSubmit, isSubmitting = false, onClose 
   const [patientId, setPatientId] = useState("");
   const [studyUid, setStudyUid] = useState("");
   const [seriesUid, setSeriesUid] = useState("");
-  const folderInputRef = useRef(null);
+  const [selectedModel, setSelectedModel] = useState("lung_tumor");
   const fileInputRef = useRef(null);
 
   const processFiles = useCallback((fileList) => {
     const allFiles = Array.from(fileList);
+    
+    const totalSize = allFiles.reduce((acc, file) => acc + file.size, 0);
+    const maxSize = 130 * 1024 * 1024; // 130 MB
+    if (totalSize > maxSize) {
+      alert(`El tamaño total del archivo o estudio (${(totalSize / 1024 / 1024).toFixed(1)} MB) excede el límite máximo permitido de 130 MB.`);
+      return;
+    }
+
     const zipFiles = allFiles.filter(f => f.name.toLowerCase().endsWith(".zip"));
     
     if (zipFiles.length > 0) {
@@ -81,8 +89,9 @@ export default function DicomUploader({ onSubmit, isSubmitting = false, onClose 
       studyUid: resolvedStudy,
       seriesUid: resolvedSeries,
       files: dcmFiles,
+      modelName: selectedModel,
     });
-  }, [selectedFolder, dcmFiles, patientId, studyUid, seriesUid, onSubmit]);
+  }, [selectedFolder, dcmFiles, patientId, studyUid, seriesUid, selectedModel, onSubmit]);
 
 
 
@@ -103,9 +112,6 @@ export default function DicomUploader({ onSubmit, isSubmitting = false, onClose 
         <h3 className="text-2xl font-bold tracking-tight" style={{ color: "var(--text-primary)" }}>
           Cargar Estudio DICOM
         </h3>
-        <p className="text-base mt-2" style={{ color: "var(--text-secondary)" }}>
-          Arrastra una carpeta con archivos DICOM o haz clic para seleccionarla
-        </p>
       </div>
 
       {!selectedFolder ? (
@@ -139,24 +145,18 @@ export default function DicomUploader({ onSubmit, isSubmitting = false, onClose 
             <FolderOpen className="w-12 h-12" style={{ color: "var(--text-accent)" }} />
           </div>
           <p className="text-2xl font-bold mb-3" style={{ color: "var(--text-primary)" }}>
-            {isDragging ? "Suelta la carpeta o archivo ZIP aquí" : "Arrastra tu carpeta DICOM o archivo .ZIP"}
+            {isDragging ? "Suelta el archivo .ZIP aquí" : "Arrastra tu archivo .ZIP"}
           </p>
           <p className="text-base" style={{ color: "var(--text-muted)" }}>
-            haz clic para buscar <span className="font-semibold" style={{ color: "var(--text-accent)" }}>archivos ZIP o DICOM</span>
-          </p>
-          <p className="text-sm mt-2" style={{ color: "var(--text-muted)" }}>
-            o <button type="button" onClick={(e) => { e.stopPropagation(); folderInputRef.current?.click(); }} className="font-semibold hover:underline" style={{ color: "var(--text-accent)" }}>seleccionar una carpeta entera</button>
+            haz clic para buscar un <span className="font-semibold" style={{ color: "var(--text-accent)" }}>archivo ZIP</span>
           </p>
           <p
             className="text-sm font-medium mt-6 px-8 py-3 rounded-full border"
             style={{ borderColor: "var(--border-subtle)", color: "var(--text-muted)", backgroundColor: "var(--bg-input)" }}
           >
-            Formatos soportados: <strong>.dcm</strong> · <strong>.dicom</strong> · <strong>.zip</strong>
+            Formatos soportados: <strong>.zip</strong>
           </p>
-          <input ref={folderInputRef} type="file" className="hidden" onChange={handleInputChange}
-            /* @ts-ignore */ webkitdirectory="" directory="" multiple />
-          <input ref={fileInputRef} type="file" className="hidden" onChange={handleInputChange}
-            multiple accept=".zip,.dcm,.dicom" />
+          <input ref={fileInputRef} type="file" className="hidden" onChange={handleInputChange} accept=".zip" />
         </div>
       ) : (
         <div className="flex flex-col gap-8 mt-2">
@@ -187,6 +187,43 @@ export default function DicomUploader({ onSubmit, isSubmitting = false, onClose 
                 <input id="input-study-uid" type="text" value={studyUid} onChange={(e) => setStudyUid(e.target.value)}
                   placeholder="1.3.6.1.4..." className="w-full px-5 py-4 rounded-xl text-base font-medium border outline-none transition-all focus:border-[var(--color-accent-500)] focus:ring-1 focus:ring-[var(--color-accent-500)]"
                   style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-card)", color: "var(--text-primary)" }} />
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-[20px] border" style={{ padding: "32px", borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-input)" }}>
+            <label className="block text-[11px] font-bold uppercase tracking-widest mb-4" style={{ color: "var(--text-secondary)" }}>Modelo de Segmentación</label>
+            <div className="relative group">
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                style={{ color: "var(--text-primary)", backgroundColor: "var(--bg-card)" }}
+                title="Seleccionar modelo de segmentación"
+              >
+                <option value="lung_tumor" style={{ color: "var(--text-primary)", backgroundColor: "var(--bg-card)" }}>Pulmón</option>
+                <option value="spleen" style={{ color: "var(--text-primary)", backgroundColor: "var(--bg-card)" }}>Bazo</option>
+              </select>
+
+              <div
+                className={cn(
+                  "flex items-center gap-5 px-6 py-5 rounded-[16px] border-2 transition-all duration-200",
+                  "group-hover:border-[var(--color-accent-500)] bg-[var(--bg-card)] shadow-sm"
+                )}
+                style={{ borderColor: "var(--border-subtle)" }}
+              >
+                <div className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0" style={{ backgroundColor: "oklch(0.72 0.19 155 / 0.12)" }}>
+                  <BrainCircuit className="w-6 h-6" style={{ color: "var(--color-accent-500)" }} />
+                </div>
+                <div className="flex-1">
+                  <p className="text-lg font-bold" style={{ color: "var(--text-primary)" }}>
+                    {selectedModel === "lung_tumor" ? "Pulmón" : "Bazo"}
+                  </p>
+                  <p className="text-sm font-medium mt-0.5" style={{ color: "var(--text-muted)" }}>
+                    Haz clic para cambiar el modelo
+                  </p>
+                </div>
+                <ChevronDown className="w-6 h-6 opacity-40 group-hover:opacity-100 transition-opacity" style={{ color: "var(--text-primary)" }} />
               </div>
             </div>
           </div>

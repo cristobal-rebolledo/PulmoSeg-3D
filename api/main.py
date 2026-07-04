@@ -55,7 +55,7 @@ from api.schemas import (
     VolumetricData,
 )
 from worker.background_task import run_segmentation_job
-from worker.model_config import get_active_config
+from worker.model_config import get_config_by_name
 
 # ---------------------------------------------------------------------------
 # Cargar variables de entorno desde .env
@@ -290,6 +290,9 @@ async def create_segmentation_job(
     study_instance_uid: str = Form(
         "unknown", description="UID del estudio DICOM"
     ),
+    model_name: str = Form(
+        "lung_tumor", description="Modelo a usar (ej. 'lung_tumor', 'spleen')"
+    ),
     db: Session = Depends(get_db),
 ):
     """
@@ -380,6 +383,7 @@ async def create_segmentation_job(
             "expected_file_count": saved_count,
         },
         "dicom_temp_dir": str(temp_dicom_dir),
+        "model_name": model_name,
     }
 
     # --- 5. Crear registro en la base de datos ---
@@ -503,6 +507,9 @@ async def create_segmentation_job_from_nifti(
     study_instance_uid: str = Form(
         "validation-study", description="UID del estudio (puede ser libre en validación)"
     ),
+    model_name: str = Form(
+        "lung_tumor", description="Modelo a usar (ej. 'lung_tumor', 'spleen')"
+    ),
     db: Session = Depends(get_db),
 ):
     """
@@ -558,6 +565,7 @@ async def create_segmentation_job_from_nifti(
         },
         "nifti_source": str(nifti_dest_path),
         "validation_mode": True,
+        "model_name": model_name,
     }
 
     # Crear registro en la base de datos
@@ -961,11 +969,13 @@ def list_jobs(
         # Extraer patient_pseudo_id y file_count desde request_data
         patient_pseudo_id = None
         file_count = None
+        model_name = None
         try:
             rd = _json.loads(job.request_data) if job.request_data else {}
             patient_pseudo_id = rd.get("patient_pseudo_id")
             dicom_src = rd.get("dicom_source", {})
             file_count = dicom_src.get("expected_file_count")
+            model_name = rd.get("model_name")
         except (ValueError, TypeError):
             pass
 
@@ -990,6 +1000,7 @@ def list_jobs(
             created_at=job.created_at.isoformat() if job.created_at else "",
             completed_at=completed_at,
             file_count=file_count,
+            model_name=model_name,
             volume_ml=volume_ml,
             longest_diameter_mm=longest_diameter_mm,
         ))
@@ -1037,11 +1048,11 @@ def health_check():
 # ===========================================================================
 @app.get(
     "/config",
-    summary="Obtiene la configuración activa del modelo",
-    description="Devuelve los parámetros del modelo que se están usando actualmente.",
+    summary="Obtiene la configuración de un modelo",
+    description="Devuelve los parámetros técnicos y de UI de un modelo específico (ej. 'lung_tumor', 'spleen').",
 )
-def get_config():
+def get_config(model_name: str = "lung_tumor"):
     """Retorna la configuración cargada desde model_config.py como JSON."""
-    config = get_active_config()
+    config = get_config_by_name(model_name)
     import dataclasses
     return dataclasses.asdict(config)

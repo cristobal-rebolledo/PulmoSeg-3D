@@ -179,7 +179,7 @@ export default function App() {
 
   // --- Submit Handler ---
   const handleSubmit = useCallback(
-    async ({ folderName, fileCount, patientId, studyUid, seriesUid, files }) => {
+    async ({ folderName, fileCount, patientId, studyUid, seriesUid, files, modelName }) => {
       setIsSubmitting(true);
       setSubmitError(null);
 
@@ -202,7 +202,7 @@ export default function App() {
       setIsUploadModalOpen(false);
 
       try {
-        const response = await createSegmentationJob({ files, patientId, studyUid });
+        const response = await createSegmentationJob({ files, patientId, studyUid, modelName });
 
         // 2. Reemplazar el job temporal con los datos reales del backend
         setJobs((prev) => prev.map(job => 

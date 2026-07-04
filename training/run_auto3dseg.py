@@ -25,9 +25,9 @@ from monai.apps.auto3dseg import AutoRunner
 # Configuración
 # ===========================================================================
 DATASET_DIR = Path.home() / "datasets" / "Task06_Lung"
-WORK_DIR = Path.home() / "training_output" / "auto3dseg_tumor"
+WORK_DIR = Path.home() / "training_output" / "auto3dseg_lung_tumor"
 DATALIST_PATH = WORK_DIR / "datalist.json"
-GCS_MODEL_PATH = "gs://pulmoseg-models/trained/tumor_segresnet_auto/model.pt"
+GCS_MODEL_PATH = "gs://pulmoseg-models/trained/lung_tumor_segresnet_auto/model.pt"
 
 # Hiperparámetros solicitados
 EPOCHS = 300

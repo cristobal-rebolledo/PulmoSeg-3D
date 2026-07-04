@@ -10,6 +10,7 @@ import { Sun, Moon, Wifi, WifiOff, User, X } from "lucide-react";
  * @param {string} props.subtitle      - Optional subtitle/description
  * @param {string} props.theme         - Current theme ("dark" | "light")
  * @param {function} props.onToggleTheme - Callback to toggle theme
+ * @param {function} props.onToggleTheme - Callback to toggle theme
  */
 export default function Header({ title, subtitle, theme, onToggleTheme, onCloseStudy }) {
   const { isConnected, isChecking } = useApiHealth(10000);

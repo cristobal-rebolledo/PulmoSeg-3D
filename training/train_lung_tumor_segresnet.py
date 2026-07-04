@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-train_tumor_segresnet.py — Entrenamiento SegResNet para Segmentación de Tumores Pulmonares
+train_lung_tumor_segresnet.py — Entrenamiento SegResNet para Segmentación de Tumores Pulmonares
 =========================================================================================
 Dataset  : MSD Task06_Lung (63 casos de entrenamiento, etiqueta 1 = cancer)
 Modelo   : SegResNet (MONAI)
 Entrena  : 1 fold | 300 epochs | patch 96×96×96 | batch 2
-Salida   : Mejor modelo por Dice de validación → gs://pulmoseg-models/trained/tumor_segresnet_v1/model.pt
+Salida   : Mejor modelo por Dice de validación → gs://pulmoseg-models/trained/lung_tumor_segresnet_v1/model.pt
 
 Uso:
     # Desde la VM (después de ejecutar setup_vm.sh):
-    python training/train_tumor_segresnet.py
+    python training/train_lung_tumor_segresnet.py
 
     # Con ruta personalizada al dataset:
-    python training/train_tumor_segresnet.py --dataset_dir /home/datasets/Task06_Lung
+    python training/train_lung_tumor_segresnet.py --dataset_dir /home/datasets/Task06_Lung
 """
 
 import argparse
@@ -59,8 +59,8 @@ from monai.utils import set_determinism
 
 # Rutas (se sobreescriben con --dataset_dir si se pasa por argumento)
 DEFAULT_DATASET_DIR = Path("/home/datasets/Task06_Lung")
-OUTPUT_DIR = Path("/home/training_output/tumor_segresnet_v1")
-GCS_MODEL_PATH = "gs://pulmoseg-models/trained/tumor_segresnet_v1/model.pt"
+OUTPUT_DIR = Path("/home/training_output/lung_tumor_segresnet_v1")
+GCS_MODEL_PATH = "gs://pulmoseg-models/trained/lung_tumor_segresnet_v1/model.pt"
 
 # Hiperparámetros (según las restricciones solicitadas)
 PATCH_SIZE = (96, 96, 96)
