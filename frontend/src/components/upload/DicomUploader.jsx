@@ -14,6 +14,14 @@ export default function DicomUploader({ onSubmit, isSubmitting = false, onClose 
 
   const processFiles = useCallback((fileList) => {
     const allFiles = Array.from(fileList);
+    
+    const totalSize = allFiles.reduce((acc, file) => acc + file.size, 0);
+    const maxSize = 130 * 1024 * 1024; // 130 MB
+    if (totalSize > maxSize) {
+      alert(`El tamaño total del archivo o estudio (${(totalSize / 1024 / 1024).toFixed(1)} MB) excede el límite máximo permitido de 130 MB.`);
+      return;
+    }
+
     const zipFiles = allFiles.filter(f => f.name.toLowerCase().endsWith(".zip"));
     
     if (zipFiles.length > 0) {
@@ -190,10 +198,11 @@ export default function DicomUploader({ onSubmit, isSubmitting = false, onClose 
                 value={selectedModel}
                 onChange={(e) => setSelectedModel(e.target.value)}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                style={{ color: "var(--text-primary)", backgroundColor: "var(--bg-card)" }}
                 title="Seleccionar modelo de segmentación"
               >
-                <option value="lung_tumor">Pulmón</option>
-                <option value="spleen">Bazo</option>
+                <option value="lung_tumor" style={{ color: "var(--text-primary)", backgroundColor: "var(--bg-card)" }}>Pulmón</option>
+                <option value="spleen" style={{ color: "var(--text-primary)", backgroundColor: "var(--bg-card)" }}>Bazo</option>
               </select>
 
               <div

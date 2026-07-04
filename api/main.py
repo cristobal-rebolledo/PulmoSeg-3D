@@ -969,11 +969,13 @@ def list_jobs(
         # Extraer patient_pseudo_id y file_count desde request_data
         patient_pseudo_id = None
         file_count = None
+        model_name = None
         try:
             rd = _json.loads(job.request_data) if job.request_data else {}
             patient_pseudo_id = rd.get("patient_pseudo_id")
             dicom_src = rd.get("dicom_source", {})
             file_count = dicom_src.get("expected_file_count")
+            model_name = rd.get("model_name")
         except (ValueError, TypeError):
             pass
 
@@ -998,6 +1000,7 @@ def list_jobs(
             created_at=job.created_at.isoformat() if job.created_at else "",
             completed_at=completed_at,
             file_count=file_count,
+            model_name=model_name,
             volume_ml=volume_ml,
             longest_diameter_mm=longest_diameter_mm,
         ))
@@ -1045,11 +1048,11 @@ def health_check():
 # ===========================================================================
 @app.get(
     "/config",
-    summary="Obtiene la configuración activa del modelo",
-    description="Devuelve los parámetros del modelo que se están usando actualmente.",
+    summary="Obtiene la configuración de un modelo",
+    description="Devuelve los parámetros técnicos y de UI de un modelo específico (ej. 'lung_tumor', 'spleen').",
 )
-def get_config():
+def get_config(model_name: str = "lung_tumor"):
     """Retorna la configuración cargada desde model_config.py como JSON."""
-    config = get_config_by_name()
+    config = get_config_by_name(model_name)
     import dataclasses
     return dataclasses.asdict(config)

@@ -250,6 +250,9 @@ class JobListEntry(BaseModel):
     file_count: Optional[int] = Field(
         None, description="Número de archivos DICOM procesados"
     )
+    model_name: Optional[str] = Field(
+        None, description="Nombre del modelo utilizado (ej. 'lung_tumor', 'spleen')"
+    )
     # Métricas clave extraídas de result_data (solo si COMPLETED)
     volume_ml: Optional[float] = Field(
         None, description="Volumen del nódulo en mL (solo si COMPLETED)"
