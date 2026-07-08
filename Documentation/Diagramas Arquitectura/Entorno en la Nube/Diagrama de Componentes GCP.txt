@@ -1,0 +1,45 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+    subgraph CapaPresentacion["Capa de Presentación"]
+        UI["Módulo Externo / Frontend\n(Firebase Hosting)"]
+    end
+
+    subgraph CapaNegocio["Capa de Lógica y Orquestación"]
+        API["FastAPI Gateway\n(Async Orchestrator / Cloud Run)"]
+    end
+
+    subgraph CapaProcesamiento["Capa de Aplicación e Inferencia"]
+        Worker["Motor de Inferencia\n(Background Task / Cloud Run)"]
+    end
+
+    subgraph CapaDatos["Capa de Almacenamiento y Persistencia (GCP)"]
+        DB[("Google Cloud SQL\n(PostgreSQL 15)")]
+        FS[("Cloud Storage\n(Buckets DICOM/NIfTI)")]
+    end
+
+    subgraph CloudEnv["Entorno Cloud (Google Cloud Platform)"]
+        CapaPresentacion
+        CapaNegocio
+        CapaProcesamiento
+        CapaDatos
+    end
+
+    %% Relaciones Técnicas y Flujos de Interacción
+    UI == 1. Sube DICOM (Multipart), Consulta Estado y Descarga Resultados ==> API
+    
+    API -.->| 2. Encola Trabajo Asíncrono | Worker
+    API <-->| 3. Actualiza/Lee Estado del Job | DB
+    API <-->| 4. Transfiere DICOM a Buckets y Sirve Resultados | FS
+    
+    Worker <-->| 5. Descarga Inputs/Pesos y Guarda NIfTI | FS
+
+    %% Estilos Visuales Adaptados
+    style UI fill:#404040,color:#fff
+    style API fill:#ea580c,color:#fff
+    style Worker fill:#16a34a,color:#fff
+    style DB fill:#0284c7,color:#fff
+    style FS fill:#0284c7,color:#fff
+    style CloudEnv fill:#f8fafc,stroke:#64748b,stroke-width:2px,stroke-dasharray: 5 5

@@ -1,0 +1,28 @@
+sequenceDiagram
+    actor C as Médico
+    participant FE as Frontend
+    participant CR as Cloud Run
+    participant DB as Cloud SQL
+    participant GCS as Cloud Storage
+
+    Note over C,GCS: 1. Envío del Estudio
+    C->>FE: Selecciona archivos DICOM
+    FE->>CR: POST /segment (multipart)
+    CR->>DB: Registra Job → QUEUED
+    CR-->>FE: 202 Accepted + job_id
+
+    Note over CR,GCS: 2. Procesamiento Asíncrono
+    CR->>GCS: Sube DICOMs de entrada
+    CR->>GCS: Descarga pesos del modelo
+    CR->>DB: Actualiza estado → PROCESSING
+    CR->>CR: Pipeline MONAI (Inferencia 3D)
+    CR->>GCS: Sube máscara (mask.nii.gz)
+    CR->>DB: Actualiza estado → COMPLETED
+
+    Note over FE,DB: 3. Consulta de Resultados
+    loop Polling periódico
+        FE->>CR: GET /status/job_id
+        CR->>DB: Consulta estado
+        CR-->>FE: Estado + métricas clínicas
+    end
+    FE->>C: Muestra resultados y visor MPR

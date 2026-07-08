@@ -1,0 +1,35 @@
+graph TD
+    %% Definición de Estilos
+    classDef storage fill:#0078D4,stroke:#005a9e,stroke-width:2px,color:#fff;
+    classDef process fill:#107C10,stroke:#0b5a0b,stroke-width:1px,color:#fff;
+    classDef box fill:#f3fbf3,stroke:#107C10,stroke-width:2px,stroke-dasharray: 5 5;
+
+    %% Nodos de Almacenamiento (Persistencia)
+    In[(Inputs: DICOM Slices)]
+    Weights[(Weights: model.pt)]
+    Out[(Outputs: NIfTI & Maps)]
+    DB[(SQLite: Clinical Results)]
+
+    %% Flujo Principal
+    In -->|Lectura de Archivos| P1
+
+    subgraph Motor [Motor de Inferencia - worker/pipeline/]
+        P1["1. loader.py: Ingestión y Validación"]
+        P2["2. loader.py: Conversión Volumétrica 3D"]
+        P3["3. transforms.py: Preprocesamiento MONAI (Orientación, Resampling, Normalización HU)"]
+        P4["4. inference.py: Inferencia U-Net"]
+        P5["5. postprocess.py: Alineación y Guardado"]
+        P6["6. clinical_metrics.py: Análisis Cuantitativo"]
+
+        P1 --> P2 --> P3 --> P4 --> P5 --> P6
+    end
+
+    %% Relaciones de Dependencia y Salida
+    Weights -.->|Carga de Pesos| P4
+    P5 -->|Escritura de Imágenes| Out
+    P6 -->|Persistencia de Métricas| DB
+
+    %% Aplicación de Clases
+    class In,Weights,Out,DB storage;
+    class P1,P2,P3,P4,P5,P6 process;
+    class Motor box;
