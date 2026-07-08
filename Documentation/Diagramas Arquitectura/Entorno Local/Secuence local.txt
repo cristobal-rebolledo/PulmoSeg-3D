@@ -1,0 +1,43 @@
+sequenceDiagram
+    autonumber
+    participant U as Usuario
+    participant FE as Frontend (React)
+    participant API as API (FastAPI)
+    participant FS as Sistema de Archivos
+    participant DB as SQLite (Estados)
+    participant W as Worker (IA/MONAI)
+
+    Note over U, W: Proceso de Carga y Orquestación
+    U->>FE: Selecciona carpeta DICOM
+    FE->>API: POST /segment (Multipart Files)
+    
+    API->>FS: Crea carpeta local_storage/inputs/{job_id}/
+    API->>FS: Escribe archivos .dcm
+    API->>DB: Inserta registro (status='PENDING')
+    API-->>FE: Retorna job_id (HTTP 202 Accepted)
+    
+    Note over FE, W: El Frontend queda libre (Polling)
+    
+    Note over API, W: Ejecución Asíncrona (Background)
+    API->>W: Dispara tarea (Thread/Process)
+    W->>DB: Actualiza status='PROCESSING'
+    
+    W->>FS: Lee DICOMs desde inputs/{job_id}
+    W->>W: Pipeline: NIfTI -> Resampling -> Inferencia
+    
+    W->>FS: Escribe volume_iso.nii.gz en outputs/{job_id}/
+    W->>FS: Escribe mask.nii.gz y metrics.json
+    
+    W->>DB: Actualiza status='COMPLETED' + Métricas
+    
+    Note over FE, API: Recuperación de Resultados
+    loop Cada 3 segundos
+        FE->>API: GET /status/{job_id}
+        API->>DB: Consulta estado
+        API-->>FE: Retorna 'PROCESSING' o 'COMPLETED'
+    end
+    
+    FE->>API: GET /nifti/{job_id} + /volume/{job_id}
+    API->>FS: Lee archivos de outputs/{job_id}/
+    API-->>FE: Envía archivos binarios
+    FE->>U: Renderiza MPR con resultados

@@ -1,0 +1,26 @@
+sequenceDiagram
+    actor C as Médico
+    participant FE as Frontend
+    participant CR as Cloud Run (API + Worker)
+    participant DB as Cloud SQL
+
+    Note over C,DB: 1. Recepción y Aceptación
+    C->>FE: Sube archivo inválido (ej. PDF / ZIP vacío)
+    FE->>CR: POST /segment
+    CR->>DB: Registra Job → QUEUED
+    CR-->>FE: 202 Accepted + job_id
+
+    Note over CR,DB: 2. Validación Asíncrona (Background)
+    CR->>DB: Actualiza estado → PROCESSING
+    CR->>CR: Inspecciona formato (Firma DICM)
+    CR--xCR: Falla: "No es un estudio DICOM válido"
+    CR->>CR: 🗑️ Elimina archivo del disco temporal
+    CR->>DB: Actualiza estado → FAILED + Mensaje
+
+    Note over C,DB: 3. Consulta y Notificación
+    loop Polling de Estado
+        FE->>CR: GET /status/job_id
+        CR->>DB: Lee estado actual
+        CR-->>FE: Retorna FAILED + Error
+    end
+    FE->>C: Muestra alerta de archivo inválido

@@ -1,0 +1,32 @@
+graph TD
+    %% Declaración de Nodos para evitar errores de contexto
+    User["🌐 Navegador / Usuario"]
+    FH["☁️ Firebase Hosting"]
+    FastAPI["⚡ Google Cloud Run:<br>API FastAPI"]
+    Worker["⚙️ Worker Interno<br>(asyncio + ThreadPool)"]
+    DB[("🗄️ Cloud SQL / SQLite")]
+    GCS[("🪣 Cloud Storage GCS")]
+    Visor["📺 Visor MPR"]
+
+    %% Flujo de Entrada
+    User -->|POST /segment<br>multipart, hasta 130 MB| FH
+    FH --> FastAPI
+
+    FastAPI -->|1. Guarda DICOM en local_storage/<br>2. Crea registro en DB QUEUED<br>3. Encola tarea en asyncio.Queue| Worker
+
+    %% Pipeline del Worker
+    subgraph Pipeline de Procesamiento
+        Worker --> P1["1. Convierte DICOM ➔ NIfTI (SimpleITK)"]
+        P1 --> P2["2. Preprocesa (MONAI Transforms)"]
+        P2 --> P3["3. Inferencia (SlidingWindow + GPU)"]
+        P3 --> P4["4. Post-procesa (mask + uncertainty)"]
+        P4 --> P5["5. Calcula métricas (volume_ml, RECIST)"]
+    end
+
+    %% Persistencia y Actualización
+    P5 -->|Actualiza estado a COMPLETED| DB
+    P5 -->|Sube mask y uncertainty .nii.gz| GCS
+
+    %% CORRECCIÓN: Consultas de Lectura (Sintaxis universal para líneas punteadas)
+    User -. "GET /status/{job_id} (polling)" .-> DB
+    Visor -. "GET /volume/{job_id}<br>GET /nifti/{job_id}<br>GET /dicom/{job_id}/{filename}" .-> GCS

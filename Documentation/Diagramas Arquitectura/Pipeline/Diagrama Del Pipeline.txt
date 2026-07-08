@@ -1,0 +1,53 @@
+graph TD
+    %% Definición de Estilos
+    classDef pipelineNode fill:#15803d,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef storageNode fill:#0284c7,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef modelNode fill:#4f46e5,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef dbNode fill:#ea580c,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef orchNode fill:#16a34a,stroke:#fff,stroke-width:3px,color:#fff;
+    classDef configNode fill:#9333ea,stroke:#fff,stroke-width:2px,color:#fff;
+
+    %% Nodos Externos de Entrada
+    InDICOM[("GCS Bucket: Inputs<br/>(Estudios DICOM)")]:::storageNode
+    InWeights[("GCS Bucket: Model Weights<br/>(Pesos .pt)")]:::modelNode
+
+    %% Límite del Motor de Inferencia
+    subgraph Motor ["Motor de Inferencia (Worker ML)"]
+        style Motor fill:#f0fdf4,stroke:#16a34a,stroke-width:2px,stroke-dasharray: 5 5,color:#14532d,font-weight:bold
+
+        Config["Gestor Multimodelo<br/>(model_config.py)"]:::configNode
+        Orchestrator["Orquestador Asíncrono<br/>(background_task.py)"]:::orchNode
+
+        Config -.->|Carga hiperparámetros| Orchestrator
+
+        subgraph Pipeline ["Pipeline MONAI"]
+            style Pipeline fill:#dcfce7,stroke:#15803d,stroke-width:1px
+
+            P1["1. DICOM Ingestion<br/>(loader.py — Recuperación y Validación)"]:::pipelineNode
+            P2["2. Volumetric Converter<br/>(loader.py — Apilamiento 2D a 3D → NIfTI)"]:::pipelineNode
+            P3["3. MONAI Transforms<br/>(transforms.py — Windowing HU e Isotropía)"]:::pipelineNode
+            P4["4. SlidingWindow Inferer<br/>(inference.py — Segmentación Voxel a Voxel)"]:::pipelineNode
+            P5["5. Postprocesamiento<br/>(postprocess.py + clinical_metrics.py<br/>Máscara binaria, Uncertainty Map, Métricas mm³)"]:::pipelineNode
+
+            P1 --> P2 --> P3 --> P4 --> P5
+        end
+
+        Orchestrator == Dispara y Supervisa ==> P1
+        P5 -.->|Retorna Resultados y Métricas| Orchestrator
+
+        %% Conexión directa hacia las transformaciones
+        Config -.->|Inyecta valores de HU y Spacing| P3
+        Config -.->|Inyecta roi_size y overlap| P4
+    end
+
+    %% Nodos Externos de Salida
+    OutNIfTI[("GCS Bucket: Outputs<br/>(mask.nii.gz + uncertainty.nii.gz)")]:::storageNode
+    OutStatus[("Google Cloud SQL<br/>(PostgreSQL 15)")]:::dbNode
+
+    %% Conexiones con el exterior
+    InDICOM -->|Descarga Volumen| P1
+    InWeights -.->|Carga de Modelo| P4
+
+    %% Flujos de salida controlados por el Orquestador
+    Orchestrator -.->|Sube Archivos NIfTI a GCS| OutNIfTI
+    Orchestrator -.->|Actualiza Estado PROGRESS/COMPLETED<br/>y Métricas Clínicas| OutStatus

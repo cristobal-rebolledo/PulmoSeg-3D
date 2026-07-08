@@ -1,0 +1,62 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+    subgraph CapaPresentacion["Capa de Presentación"]
+        UI["Frontend React\n(Nginx)"]
+    end
+
+    subgraph CapaNegocio["Capa de Lógica y Orquestación"]
+        API["FastAPI Gateway\n(Async Orchestrator)"]
+    end
+
+    subgraph CapaProcesamiento["Capa de Aplicación e Inferencia"]
+        Worker["Motor de Inferencia\n(MONAI / PyTorch)"]
+    end
+
+    subgraph CapaDatos["Capa de Persistencia (PoC)"]
+        DB[("SQLite\n(Metadatos)")]
+        FS[("Local Storage\n(DICOM/NIfTI)")]
+    end
+
+    subgraph DockerEnv["Entorno Docker (Orquestación Compose)"]
+        CapaPresentacion
+        CapaNegocio
+        CapaProcesamiento
+        CapaDatos
+    end
+
+    subgraph CapaHardware["Capa de Infraestructura"]
+        GPU["NVIDIA GPU\n(CUDA Cores)"]
+    end
+
+    subgraph CapaTransversal["Capa de Observabilidad"]
+        Obs["Logging / Monitoring\n(Stats)"]
+    end
+
+    %% Relaciones Técnicas
+    UI <== "REST API" ==> API
+    API -. "Background Task" .-> Worker
+    API <--> DB
+    API <--> FS
+    Worker <--> FS
+    UI --- FS
+    Worker === GPU
+
+    %% Trazas de Observabilidad
+    UI -.- Obs
+    API -.- Obs
+    Worker -.- Obs
+
+    %% Estilos
+    style UI fill:#3b3b3b,color:#fff
+    style API fill:#f57c00,color:#fff
+    style Worker fill:#2e7d32,color:#fff
+    style DB fill:#0277bd,color:#fff
+    style FS fill:#0277bd,color:#fff
+    style GPU fill:#76b900,color:#fff
+    style Obs fill:#283593,color:#fff
+    style DockerEnv fill:#f0f7ff,stroke:#007bff,stroke-width:2px,stroke-dasharray: 5 5
+    style CapaHardware fill:#fff3e0,stroke:#ff9800
+    style CapaTransversal fill:#e8eaf6,stroke:#283593
